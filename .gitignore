@@ -1,0 +1,7 @@
+# macOS 本机文件
+.DS_Store
+
+# Pi 本机配置与临时运行材料
+/.pi/settings.json
+/.pi/tmp/
+/.pi/logs/

@@ -179,6 +179,7 @@ pi-steward/
 | `not_found` | 404 | 对象不存在 |
 | `invalid_request` | 400 | 请求格式不符合 schema |
 | `conflict` | 409 | 版本号不一致，或当前状态不允许该动作 |
+| `machine_required` | 409 | 安排或重新安排时无法确定执行电脑 |
 | `attempt_ended` | 409 | 尝试已结束，或任务已取消 |
 | `rate_limited` | 429 | 登录失败次数过多 |
 | `internal_error` | 500 | 平台内部错误 |
@@ -365,7 +366,7 @@ plist 设置 `RunAtLoad`、`KeepAlive`，日志写到 `~/Library/Logs/pi-steward
 
 - **镜像**：`docker/platform.Dockerfile`，参照 Pi Reach Relay 的多阶段构建写法。构建阶段先构建 `contract` 和 `web`，再构建 `platform`，然后用 `pnpm deploy --prod` 产出运行文件，前端静态文件放进镜像。运行阶段用 `node` 用户，带 `/health` 健康检查。
 - **持久化**：SQLite 数据库放在卷 `/data` 中。
-- **环境变量**：`STEWARD_DATA_DIR`、`STEWARD_ACCESS_PASSWORD_HASH`、`STEWARD_PUBLIC_ORIGIN`（用于 Origin 检查和 Cookie）、`PORT`。本地测试可设置 `STEWARD_ALLOW_LOCAL_HTTP=1`，监听地址限回环。反向代理若会覆盖 `X-Steward-Client-IP` 为可信客户端地址，且平台端口仅由可信代理访问，可设置 `STEWARD_TRUST_PROXY_CLIENT_IP=1`，登录限流按该地址区分。
+- **环境变量**：配置和本地 Compose 用法见[部署与 Mac 接入](../../DEPLOYMENT.md)。本地程序测试可设置 `STEWARD_ALLOW_LOCAL_HTTP=1`，监听地址限回环。
 - **管理命令**：用 `docker compose exec platform node dist/admin.js <命令>` 执行：
   - `hash-password`：生成访问密码哈希；
   - `machine:add <名称>`：添加电脑，令牌只显示一次；
@@ -408,6 +409,24 @@ plist 设置 `RunAtLoad`、`KeepAlive`，日志写到 `~/Library/Logs/pi-steward
 | A9 | 离线与恢复 | 停掉启动器超过 90 秒后任务显示待核对；恢复后待核对消失 |
 
 结果写在本节表格之后，新增「真机验收结果（日期，版本）」小节。
+
+#### 真机验收结果（2026-11-20，本地预验收）
+
+本轮在 macOS、tmux 3.7c、Pi 1.5.2、Docker 29.8.2 环境验证。平台镜像为 Linux amd64、Node 24.20.0 Alpine。服务器、域名与代理参数待确认，下面记录本机证据和待验收部分。
+
+| 编号 | 当前证据 | 仍需验收 |
+| --- | --- | --- |
+| A1 | Compose 配置校验和镜像构建通过。容器以非 root 用户运行，提供健康检查、登录页、Manifest 和图标。测试验证了 Secure Cookie、机器登记、SQLite 备份，以及重建容器后登录会话与任务保留 | 通过目标服务器 HTTPS 登录并验证数据保留 |
+| A2 | 测试覆盖启动器配置、安装卸载调用和心跳登记 | 用真实 LaunchAgent 安装并在网页观察在线与登记 |
+| A3 | 隔离 tmux 用假 Agent 自动领取并开工 | 真实 Pi 自动开工，Pi Reach 显示任务会话 |
+| A4 | 假 Agent 回报进展，平台测试覆盖问题打开和解决 | 从 Pi Reach 回答真实 Pi 的问题并观察状态 |
+| A5 | 假 Agent 完成交付、退出，平台进入待验收并释放名额 | 实际 Pi 提交并通过扩展工具退出 |
+| A6 | 扩展单元测试覆盖未交付、失败或尚在请求时拒绝退出 | 在 Pi 交互会话里触发并验证进程仍存活 |
+| A7 | 假 Agent 返修复用原会话标识并交付第二版，浏览器测试完成第二版验收 | 真实 Pi 回到原会话并保留对话历史 |
+| A8 | 平台和启动器测试分别覆盖取消、退出与中断 | 用真实 Pi 从终端退出及网页取消 |
+| A9 | 以可注入时钟验证租约过期显示待核对、续租后恢复 | 停止真实 LaunchAgent 并等待租约过期，再启动恢复 |
+
+上述证据用于本地预验收。A1–A9 按右列执行后更新本表。
 
 ## 13. 里程碑
 

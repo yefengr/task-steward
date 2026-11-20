@@ -6,7 +6,7 @@ Pi Steward 是面向个人的跨电脑任务清单与执行协调系统：在自
 
 ## 当前范围
 
-目前已有方案、界面原型及首版开发所用的 pnpm 工作区和共享接口骨架。实现进度见下方路线图。
+首版的任务平台、网页、Mac 启动器和 Pi 扩展可在本机验证。目标服务器和真实 Pi 的联调进度见下方路线图。
 
 ## 文档入口
 
@@ -19,7 +19,7 @@ Pi Steward 是面向个人的跨电脑任务清单与执行协调系统：在自
 
 ## 本地开发
 
-在仓库根目录用 Node 24.20.0 或同一 Node 24 系列的更高版本、pnpm 11.20.0 运行 `pnpm install --frozen-lockfile`，再运行 `pnpm verify`。
+在仓库根目录用 Node 24.20.0 或同一 Node 24 系列的更高版本、pnpm 11.20.0 运行 `pnpm install --frozen-lockfile`，再运行 `pnpm verify`。构建后可运行 `node scripts/smoke-launcher.mjs` 验证假 Agent 和 tmux 链路，或运行 `pnpm --filter @pi-steward/web test:e2e` 执行浏览器测试。发布及启动器配置见[部署与 Mac 接入](docs/DEPLOYMENT.md)。
 
 ## 阅读重点
 

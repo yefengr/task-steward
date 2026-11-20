@@ -1,0 +1,18 @@
+services:
+  platform:
+    image: pi-steward-platform:local
+    build:
+      context: ..
+      dockerfile: docker/platform.Dockerfile
+    restart: unless-stopped
+    environment:
+      STEWARD_PUBLIC_ORIGIN: ${STEWARD_PUBLIC_ORIGIN:?Set the HTTPS public origin}
+      STEWARD_ACCESS_PASSWORD_HASH: ${STEWARD_ACCESS_PASSWORD_HASH:?Set the access password hash}
+      STEWARD_TRUST_PROXY_CLIENT_IP: ${STEWARD_TRUST_PROXY_CLIENT_IP:-0}
+    ports:
+      - "127.0.0.1:${STEWARD_BIND_PORT:-3000}:3000"
+    volumes:
+      - steward-data:/data
+
+volumes:
+  steward-data:

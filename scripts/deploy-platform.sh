@@ -79,7 +79,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 const page = await fetch("http://127.0.0.1:3000/pair", { signal: AbortSignal.timeout(3000) });
-if (!page.ok || !(await page.text()).includes("Pi Steward")) process.exit(1);
+if (!page.ok || !(await page.text()).includes("Task Steward")) process.exit(1);
 const db = new DatabaseSync(join(process.env.STEWARD_DATA_DIR, "steward.sqlite"), { readOnly: true });
 const version = readdirSync("/app/migrations").filter(name => /^\d{4}-[\w-]+\.sql$/.test(name)).length;
 if (db.prepare("PRAGMA user_version").get().user_version !== version || db.prepare("PRAGMA quick_check").get().quick_check !== "ok") process.exit(1);

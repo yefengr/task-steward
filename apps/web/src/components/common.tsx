@@ -6,7 +6,7 @@ import { describeError } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 
 export function Brand() {
-  return <div className="brand"><img src="/steward.svg" width="20" height="20" alt="" /><span>Pi Steward</span></div>;
+  return <div className="brand"><img src="/steward.svg" width="20" height="20" alt="" /><span>Task Steward</span></div>;
 }
 
 export function Loading() {

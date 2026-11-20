@@ -139,10 +139,11 @@ test('手机从配对深链登录，已使用的短码不再允许确认', async
 test('生产静态资源和页面入口保持各自的响应', async ({ request, platform }) => {
   const { origin } = platform;
   const ticket = 'a684b6a7-ab2e-45e2-81ba-1f8b42f6e774';
-  for (const route of ['/', '/login', '/machines', `/projects/${projectId}`, `/tasks/${ticket}`]) {
+  for (const route of ['/', '/login', '/machines', '/pair', `/projects/${projectId}`, `/tasks/${ticket}`]) {
     const response = await request.get(`${origin}${route}`);
     expect(response.status(), route).toBe(200);
     expect(response.headers()['content-type']).toContain('text/html');
+    expect(await response.text()).toContain('<title>Task Steward</title>');
   }
   for (const route of ['/assets/missing.js', '/tasks/missing.png', '/unknown']) {
     const response = await request.get(`${origin}${route}`);
@@ -154,7 +155,7 @@ test('生产静态资源和页面入口保持各自的响应', async ({ request,
   expect(await unknownApi.json()).toMatchObject({ error: { code: 'not_found' } });
   const manifest = await request.get(`${origin}/manifest.webmanifest`);
   expect(manifest.headers()['content-type']).toContain('application/manifest+json');
-  expect(await manifest.json()).toMatchObject({ display: 'standalone', start_url: '/', scope: '/' });
+  expect(await manifest.json()).toMatchObject({ name: 'Task Steward', short_name: 'Task Steward', display: 'standalone', start_url: '/', scope: '/' });
   for (const size of [192, 512]) expect((await request.get(`${origin}/steward-${size}.png`)).headers()['content-type']).toContain('image/png');
 });
 

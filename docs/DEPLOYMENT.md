@@ -1,4 +1,4 @@
-# Pi Steward 部署与 Mac 接入
+# Task Steward 部署与 Mac 接入
 
 ## 构建和配置
 
@@ -30,8 +30,8 @@ docker compose --env-file /path/to/private-env -f docker/compose.example.yml up 
 
 Steward 在 GitHub Actions 中提供两个手动触发的工作流，从 `main` 运行。
 
-- [Deploy Steward platform](../.github/workflows/deploy.yml) 先运行 `pnpm verify`，构建 `linux/amd64` 镜像并保留镜像 ID。`production` 作业通过 SSH 上传同一镜像，在服务器上备份 SQLite，用快照副本验证迁移与配对页，再更新原 Compose 服务。工作流检查正式站点的 HTTPS 健康响应和配对入口。
-- [Stage Steward on npm](../.github/workflows/release.yml) 先在 macOS 验证并打包，再用 GitHub OIDC 将 `@yefengr/steward` 提交到 npm 待审区。维护者在 npmjs.com 审核并完成双因素认证后，版本才会公开。批准需要新版平台支持的 CLI 前，先确认平台已部署。
+- [Deploy Task Steward platform](../.github/workflows/deploy.yml) 先运行 `pnpm verify`，构建 `linux/amd64` 镜像并保留镜像 ID。`production` 作业通过 SSH 上传同一镜像，在服务器上备份 SQLite，用快照副本验证迁移与配对页，再更新原 Compose 服务。工作流检查正式站点的 HTTPS 健康响应和配对入口。
+- [Stage Task Steward on npm](../.github/workflows/release.yml) 先在 macOS 验证并打包，再用 GitHub OIDC 将 `@yefengr/steward` 提交到 npm 待审区。维护者在 npmjs.com 审核并完成双因素认证后，版本才会公开。批准需要新版平台支持的 CLI 前，先确认平台已部署。
 
 启用前，将项目推送到 GitHub，在 `production` 环境设置 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY` 和 `DEPLOY_KNOWN_HOSTS`。SSH 主机公钥应从可信渠道核对。端口默认 22，其他端口通过环境变量 `DEPLOY_PORT` 配置。部署账号需要访问 `~/pi-steward` 和该项目的 Docker Compose 服务。生产审批可以在 `production` 环境配置。
 

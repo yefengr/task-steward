@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Pi Steward",
-  "short_name": "Steward",
+  "name": "Task Steward",
+  "short_name": "Task Steward",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

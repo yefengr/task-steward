@@ -36,7 +36,8 @@ try {
   await bundle('packages/pi-extension/dist/index.js', 'extension.js', false);
   copyFileSync(join(root, 'packages/platform-http/dist/steward-http'), join(staging, 'dist/steward-http'));
   writeFileSync(join(staging, 'package.json'), `${JSON.stringify({
-    name: '@yefengr/steward', version: launcher.version, description: 'Pi Steward macOS launcher and task extension',
+    name: '@yefengr/steward', version: launcher.version, description: 'Task Steward macOS launcher and task extension',
+    repository: { type: 'git', url: 'git+https://github.com/yefengr/task-steward.git' },
     type: 'module', bin: { stew: './dist/index.js' }, engines: { node: '>=24.20.0 <25' }, os: ['darwin'],
     files: ['dist'], dependencies: { zod: requireFromLauncher('zod/package.json').version, typebox: extension.peerDependencies.typebox },
   }, null, 2)}\n`);

@@ -1,4 +1,4 @@
-name: Stage Steward on npm
+name: Stage Task Steward on npm
 
 on:
   workflow_dispatch:

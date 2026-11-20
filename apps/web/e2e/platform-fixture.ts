@@ -43,7 +43,7 @@ async function waitForPlatform(origin: string, stopped: () => boolean) {
 }
 
 export const projectId = 'steward-demo';
-export const projectName = 'Pi Steward 任务控制台';
+export const projectName = 'Task Steward 任务控制台';
 const machineName = '测试 Mac';
 
 function platformApi(origin: string, token: string) {

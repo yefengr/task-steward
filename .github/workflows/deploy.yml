@@ -1,4 +1,4 @@
-name: Deploy Steward platform
+name: Deploy Task Steward platform
 
 on:
   workflow_dispatch:
@@ -89,4 +89,4 @@ jobs:
           "${remote[@]}" "bash -s -- '$IMAGE' '$image_id'" < scripts/deploy-platform.sh
           curl --retry 3 -fsS --max-time 10 https://steward.yefengr.cn/health | jq -e '.ok == true'
           curl -fsS --max-time 10 -o "$RUNNER_TEMP/steward-pair.html" https://steward.yefengr.cn/pair
-          grep -q 'Pi Steward' "$RUNNER_TEMP/steward-pair.html"
+          grep -q 'Task Steward' "$RUNNER_TEMP/steward-pair.html"

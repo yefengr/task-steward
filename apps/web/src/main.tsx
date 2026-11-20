@@ -7,7 +7,7 @@ import { App } from './app';
 import { createStewardTheme, stewardCssVariablesResolver } from './lib/ui/steward-theme';
 
 const root = document.getElementById('root');
-if (!root) throw new Error('Missing Pi Steward root');
+if (!root) throw new Error('Missing Task Steward root');
 createRoot(root).render(<MantineProvider defaultColorScheme="auto" theme={createStewardTheme()}
   colorSchemeManager={localStorageColorSchemeManager({ key: 'pi-steward-appearance' })} cssVariablesResolver={stewardCssVariablesResolver}>
   <App />

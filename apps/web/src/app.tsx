@@ -68,7 +68,7 @@ function WorkspacePage({ projectId, taskId, location, logout }: {
   const machinesPage = location === '/machines';
   const pairingPage = location === '/pair';
   const title = pairingPage ? t.pair.title : machinesPage ? t.common.machines
-    : project?.name ?? selectedProject ?? (home ? t.common.projects : taskId ? 'Pi Steward' : t.common.notFound);
+    : project?.name ?? selectedProject ?? (home ? t.common.projects : taskId ? 'Task Steward' : t.common.notFound);
   const newProject = project?.id ?? projects[0]?.id;
   function changed() {
     detail.refresh();
@@ -77,7 +77,7 @@ function WorkspacePage({ projectId, taskId, location, logout }: {
   }
 
   useEffect(() => {
-    document.title = `${detail.data?.task.title ?? title} · Pi Steward`;
+    document.title = `${detail.data?.task.title ?? title} · Task Steward`;
   }, [detail.data?.task.title, title]);
 
   return <Shell title={title} taskPage={!!taskId} back={detail.data ? projectPath(detail.data.task.projectId) : undefined}

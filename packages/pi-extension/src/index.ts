@@ -1,0 +1,104 @@
+import { createHash } from 'node:crypto';
+import * as c from '@pi-steward/contract';
+import type { AgentToolResult, ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { Type } from 'typebox';
+import { AgentError, agentClient, validatedBody } from './client.js';
+import { retryableWrites } from './retry-writes.js';
+
+const text = () => Type.String({ maxLength: 100_000 });
+const lines = () => Type.Array(text());
+const deliveryParameters = Type.Object({
+  summary: text(), done: lines(), notCovered: lines(), verification: lines(), howTo: lines(), issues: lines(),
+  baseCommit: Type.Optional(text()), commit: Type.Optional(text()), reportRef: Type.Optional(text()),
+});
+
+function result<T>(text: string, details: T) {
+  return { content: [{ type: 'text' as const, text }], details };
+}
+
+async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { code: string }>> {
+  try {
+    const data = await run();
+    return result(JSON.stringify(data), data);
+  } catch (error) {
+    const code = error instanceof AgentError ? error.code : 'request_failed';
+    const guidance = code === 'invalid_request' ? '请检查工具参数后重试。' :
+      code === 'attempt_ended' ? '本次尝试已结束，请检查平台状态。' :
+      code === 'conflict' ? '请核对平台状态。交付请求重试时请保留原参数。' :
+      code === 'pending_writes_full' ? '待确认的请求已达上限，请先使用原参数重试已有请求。' :
+      code === 'invalid_config' ? '请检查本机配置及 0600 文件权限后重试。' : '请稍后使用相同参数重试。';
+    return result(`Steward 请求失败（${code}）。${guidance}`, { code });
+  }
+}
+
+function deliveryId(attemptId: string) {
+  // 平台每个尝试只接受一份交付。使用派生 UUID，Pi 重载后也能重放同一请求。
+  const hex = createHash('sha256').update(`pi-steward:delivery:${attemptId}`).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+export function registerSteward(pi: ExtensionAPI, options = { env: process.env, fetcher: fetch }) {
+  const attempt = c.uuidSchema.safeParse(options.env.STEWARD_ATTEMPT_ID);
+  if (!attempt.success) return;
+  const request = agentClient(attempt.data, options);
+  const write = retryableWrites();
+  const requestId = deliveryId(attempt.data);
+  let delivered = false;
+
+  pi.registerTool({
+    name: 'steward_task', label: '读取 Steward 任务', description: '读取本次任务的目标、验收要求、决定、交付与返修反馈。',
+    parameters: Type.Object({}),
+    execute: (_id, _args, signal) => report(() => request('GET', 'context', c.agentContextResponseSchema, undefined, signal)),
+  });
+  pi.registerTool({
+    name: 'steward_progress', label: '记录 Steward 进展', description: '在关键节点回报可核验的进展和剩余步骤。',
+    parameters: Type.Object({ text: text() }),
+    execute: (_id, args, signal) => report(() => write('POST', 'progress', args, (id) => request('POST', 'progress', c.agentProgressResponseSchema,
+      validatedBody(c.agentProgressRequestSchema, { ...args, requestId: id }), signal))),
+  });
+  pi.registerTool({
+    name: 'steward_ask', label: '提出 Steward 问题', description: '记录需要用户回应的问题，随后在 Pi 会话中等待。',
+    parameters: Type.Object({ text: text(), context: text() }),
+    execute: (_id, args, signal) => report(() => write('POST', 'questions', args, (id) => request('POST', 'questions', c.agentCreateQuestionResponseSchema,
+      validatedBody(c.agentCreateQuestionRequestSchema, { ...args, requestId: id }), signal))),
+  });
+  pi.registerTool({
+    name: 'steward_question_update', label: '更新 Steward 问题', description: '将已经回答或不再需要的本次任务问题标为已解决或撤销。',
+    parameters: Type.Object({ questionId: Type.String(), status: Type.Union([Type.Literal('resolved'), Type.Literal('withdrawn')]) }),
+    execute: (_id, { questionId, status }, signal) => report(() => {
+      const route = `questions/${validatedBody(c.uuidSchema, questionId)}`;
+      return write('PATCH', route, { status }, (id) => request('PATCH', route, c.agentUpdateQuestionResponseSchema,
+        validatedBody(c.agentUpdateQuestionRequestSchema, { requestId: id, status }), signal));
+    }),
+  });
+  pi.registerTool({
+    name: 'steward_decision', label: '记录 Steward 决定', description: '记录决定，并标明该决定是否已得到用户确认。',
+    parameters: Type.Object({ text: text(), confirmedByUser: Type.Boolean() }),
+    execute: (_id, args, signal) => report(() => write('POST', 'decisions', args, (id) => request('POST', 'decisions', c.agentDecisionResponseSchema,
+      validatedBody(c.agentDecisionRequestSchema, { ...args, requestId: id }), signal))),
+  });
+  pi.registerTool({
+    name: 'steward_deliver', label: '保存 Steward 交付', description: '保存本次交付。网络失败时使用完全相同的参数重试。',
+    parameters: deliveryParameters,
+    execute: (_id, args, signal) => report(async () => {
+      const saved = await request('POST', 'deliveries', c.agentDeliveryResponseSchema,
+        validatedBody(c.agentDeliveryRequestSchema, { ...args, requestId }), signal);
+      delivered = true;
+      return saved;
+    }),
+  });
+  pi.registerTool({
+    name: 'steward_finish', label: '结束 Steward 执行', description: '交付已确认保存且本次执行已收尾时，请求 Pi 结束。',
+    parameters: Type.Object({}),
+    async execute(_id, _args, _signal, _update, ctx): Promise<AgentToolResult<{ code: string } | { ok: boolean }>> {
+      if (!delivered) return result('尚未确认保存交付，不能结束。若用户要放弃任务，请用户在平台取消或在 Pi 中直接退出。',
+        { code: 'delivery_required' });
+      ctx.shutdown();
+      return result('已请求 Pi 在本轮结束后退出。', { ok: true });
+    },
+  });
+}
+
+export default function (pi: ExtensionAPI) {
+  registerSteward(pi);
+}

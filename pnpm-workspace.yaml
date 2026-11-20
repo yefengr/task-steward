@@ -13,3 +13,8 @@ catalog:
 catalogs:
   pwa:
     typescript: 5.9.3
+
+# Pi SDK 只提供开发时类型，运行时使用本机 Pi 自带的依赖。
+allowBuilds:
+  '@google/genai': false
+  protobufjs: false

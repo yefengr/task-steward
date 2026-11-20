@@ -1,0 +1,20 @@
+{
+  "name": "@pi-steward/pi-extension",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc -p tsconfig.build.json && vitest run"
+  },
+  "dependencies": { "@pi-steward/contract": "workspace:*" },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "1.5.2", "typebox": "1.3.27" },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@types/node": "catalog:",
+    "typebox": "1.3.27",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

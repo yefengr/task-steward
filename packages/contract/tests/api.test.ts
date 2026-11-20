@@ -69,6 +69,10 @@ const samples = {
   agentDecisionRequestSchema: [{ ...request, text: '决定', confirmedByUser: false }, { ...request, text: '决定' }], agentDecisionResponseSchema: [ok, {}],
   agentDeliveryRequestSchema: [{ ...request, ...deliveryContent }, deliveryContent],
   agentDeliveryResponseSchema: [{ deliveryId: id, version: 1 }, { deliveryId: id, version: 0 }],
+  localConfigSchema: [{ platformUrl: 'https://steward.example', machineToken: `stm_${'A'.repeat(43)}`,
+    slots: 1, projects: [projectRegistration], pi: { command: 'pi', extraArgs: [] }, path: ['/usr/bin'] },
+  { platformUrl: 'http://steward.example', machineToken: `stm_${'A'.repeat(43)}`,
+    slots: 1, projects: [projectRegistration], pi: { command: 'pi', extraArgs: [] }, path: ['/usr/bin'] }],
 } satisfies Record<SchemaName, [unknown, unknown]>;
 
 it.each(Object.entries(samples))('%s 接受合法样例并拒绝非法样例', (name, [valid, invalid]) => {

@@ -3,3 +3,4 @@ export * from './models.js';
 export * from './web.js';
 export * from './launcher.js';
 export * from './agent.js';
+export * from './local-config.js';

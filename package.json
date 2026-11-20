@@ -1,0 +1,18 @@
+{
+  "name": "pi-steward",
+  "private": true,
+  "packageManager": "pnpm@11.20.0",
+  "engines": { "node": ">=24.20.0 <25" },
+  "scripts": {
+    "build:contract": "pnpm --filter @pi-steward/contract build",
+    "typecheck": "pnpm build:contract && pnpm -r --if-present run typecheck",
+    "lint": "eslint . --max-warnings=0",
+    "test": "pnpm build:contract && pnpm -r --if-present run test",
+    "build": "pnpm -r --if-present run build",
+    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "eslint": "catalog:",
+    "typescript-eslint": "catalog:"
+  }
+}

@@ -5,3 +5,20 @@
 /.pi/settings.json
 /.pi/tmp/
 /.pi/logs/
+
+# 依赖及构建产物
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+
+# 本地运行配置与 SQLite 数据
+.env
+.env.*
+!.env.example
+/data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+/.task-context.md

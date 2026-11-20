@@ -78,7 +78,7 @@ pi-steward/
 
 ## 4. 数据模型
 
-所有表的主键都用 `crypto.randomUUID()` 生成的文本，时间都存成毫秒时间戳整数。打开数据库时设置 `journal_mode=WAL`、`foreign_keys=ON`、`busy_timeout=5000`。
+项目用短标识作主键。`machine_projects`、`request_log` 用复合键，`web_sessions` 用随机会话值的哈希。其余标识按对应表使用 UUID。时间存成毫秒时间戳整数。打开文件库时设置 `journal_mode=WAL`、`foreign_keys=ON`、`busy_timeout=5000`。
 
 | 表 | 主要字段 | 说明 |
 | --- | --- | --- |
@@ -118,7 +118,7 @@ pi-steward/
 补充规则：
 
 - 待验收任务的 Agent 进程可能还在收尾，这时用户就验收或返修是允许的。领取条件要求该任务没有未结束的尝试，所以返修不会和收尾中的旧进程同时运行。
-- 平台只接受未结束尝试的 Agent 回报；任务已取消后，回报一律拒绝。
+- 平台只接受未结束尝试的新回报，任务已取消后也拒绝新的回报。已获授权的同一请求重放可以取回原结果。
 - 每次状态变化都在同一事务里写一条 `task_events`。
 
 ## 6. 领取、租约与待核对
@@ -145,7 +145,7 @@ pi-steward/
 
 **会话标识**：新任务用 `steward-<尝试编号>`。返修时沿用该任务在本机最近一次尝试的 `session_id`，`kind` 记为 `rework`；本机没有历史会话时按新会话处理。
 
-**领取结果包含**：尝试编号、任务编号、项目标识、Agent 类型、会话标识、是否恢复原会话、显示名称和首条消息。首条消息由平台按模板生成，启动器只负责原样传给 Pi，模板见第 8.2 节。
+**领取结果包含**：尝试编号、任务编号、项目标识、Agent 类型、会话标识、是否恢复原会话、尝试类型和显示名称。首条消息由启动器按第 8.2 节生成。
 
 ### 6.3 时间参数（建议）
 
@@ -164,7 +164,7 @@ pi-steward/
 
 - 更新电脑的 `last_seen_at` 和 `slots`，自动创建不存在的项目，整体覆盖 `machine_projects`；
 - 对上报"仍在"的尝试续租；
-- 返回每个尝试的处理指令：`continue`，或 `cancel`（用户已取消）。如果平台认为某个尝试未结束，启动器却没有上报它，返回 `unknown`，启动器把它当作已退出处理，交给第 7.4 节的核对流程。
+- 返回每个尝试的处理指令：`continue` 或 `cancel`（用户已取消）。如果平台认为某个尝试未结束，启动器却没有上报它，返回 `unknown` 和对应 tmux 会话名，供启动器核对。确认会话不存在后，调用第 7.3 节的退出接口。
 
 租约过期的尝试显示为「待核对」：不重新领取，不转给其他电脑，任务主状态不变。启动器重新上线并续租后，「待核对」自动消失；启动器上报退出后，按第 5 节处理。
 
@@ -181,6 +181,7 @@ pi-steward/
 | `conflict` | 409 | 版本号不一致，或当前状态不允许该动作 |
 | `attempt_ended` | 409 | 尝试已结束，或任务已取消 |
 | `rate_limited` | 429 | 登录失败次数过多 |
+| `internal_error` | 500 | 平台内部错误 |
 
 ### 7.1 三类凭据
 
@@ -201,7 +202,7 @@ pi-steward/
 | --- | --- |
 | `POST /web/auth/login`、`POST /web/auth/logout`、`GET /web/auth/me` | 登录、退出、查询登录状态 |
 | `GET /web/projects` | 项目列表，附各状态任务数 |
-| `GET /web/projects/:id/tasks` | 项目任务列表。待领取的任务附 `waiting` 字段，说明在等什么：`machine_offline`、`slots_full`、`machine_unassigned` 或 `null` |
+| `GET /web/projects/:id/tasks` | 项目任务列表。待领取的任务附 `waiting` 字段，取值为 `machine_offline`、`slots_full`、`machine_unassigned`、`machine_project_unregistered`、`previous_attempt_active` 或 `null` |
 | `POST /web/tasks` | 新建任务 |
 | `GET /web/tasks/:id` | 任务详情：内容、决定、进展、问题、全部交付、尝试、执行记录；每次尝试附执行电脑、Agent 类型、会话标识、tmux 会话名 |
 | `PATCH /web/tasks/:id` | 修改标题、目标、验收要求、说明、Agent 类型、执行电脑；带 `version` |
@@ -244,13 +245,7 @@ Agent 的写请求同样带 `requestId`。
 
 ### 8.2 首条消息模板
 
-平台生成的首条消息包含：
-
-- 任务标题、目标、验收要求；
-- 返修时附上被返修的版本号和反馈；
-- 工作要求：按项目规范使用独立分支和 worktree；在有意义的节点调用 `steward_progress`；需要用户决定时调用 `steward_ask`，然后在对话中等待回答；完成后调用 `steward_deliver`，再调用 `steward_finish`。
-
-完整背景让 Agent 用 `steward_task` 读取。首条消息不包含执行编号和令牌。
+启动器根据尝试类型选择固定的开工或返修指令。指令引导 Pi 先调用 `steward_task` 读取标题、目标、验收要求、决定和此前的返修反馈。按项目规则和任务授权工作，在关键节点调用 `steward_progress`，需要用户决定时调用 `steward_ask` 并在会话中等待。交付通过 `steward_deliver` 保存，收尾后调用 `steward_finish`。完整任务文本通过 Agent 接口传输。
 
 ### 8.3 工具
 
@@ -265,7 +260,7 @@ Agent 的写请求同样带 `requestId`。
 
 `steward_finish` 的这条限制来自首版技术方案第 9.2 节的验证结果：Pi 在没收到结束指令时也会自己调用退出工具。只靠提示词约束不可靠，所以直接在工具里拦住。
 
-接口请求失败时，工具把错误原文返回给 Pi，让它稍后重试，不在扩展里排队。这与首版技术方案第 5.3 节一致：Agent 的回报是同步的。
+接口请求失败时，工具返回可重试的错误码和净化后的说明，请 Pi 稍后重试。Agent 的回报同步发送，符合首版技术方案第 5.3 节。
 
 ## 9. 启动器
 
@@ -295,7 +290,7 @@ Agent 的写请求同样带 `requestId`。
 3. 发送心跳，执行平台返回的 `cancel` 指令。
 4. 运行中的尝试数少于名额时请求领取；领到后启动 Pi，再上报 `started`。
 
-本地状态保存在 `~/Library/Application Support/pi-steward/launcher-state.json`，内容是未结束的尝试和待报告事件。写入时先写临时文件再改名，避免写坏。
+本地状态保存在 `~/Library/Application Support/pi-steward/launcher-state.json`。发出领取请求前先记录 `requestId`，收到领取结果后先记录尝试和确定的 tmux 会话名。重启时重试未确认的请求，核对会话和待报告事件。写入采用临时文件加原子改名。
 
 ### 9.3 启动 Pi
 
@@ -304,10 +299,10 @@ Agent 的写请求同样带 `requestId`。
 ```
 tmux -L steward new-session -d -s steward-<尝试编号> -c <项目本机路径> \
   -e STEWARD_ATTEMPT_ID=<尝试编号> -e PATH=<配置的 path> \
-  -- pi -e <扩展路径> --session-id <会话标识> -n <显示名称> <首条消息>
+  -- pi -e <扩展路径> --session-id <会话标识> -n <处理后的显示名称> -- <固定指令>
 ```
 
-- 参数以数组形式传给 `execFile`，不经过 shell 拼接。评审时请核对：宿主机的 tmux 3.7c 是否会把多个参数直接执行、不经 shell；若不是，改用严格的 shell 转义。
+- 参数以数组形式传给 `execFile`。tmux 3.7c 的多参数模式直接执行子进程。调用 tmux 时还要给 `execFile` 设置包含 Pi、Node、tmux 目录的 `env.PATH`，使后台 pane 得到完整的搜索路径。显示名称按第 16 节第 04 条约束。
 - 返修时用原 `--session-id` 在同一项目目录启动，已经验证可行（V4）。
 - 不加 `-a`，验证显示测试项目不需要它。需要无人值守授权的项目，在 `pi.extraArgs` 里按项目配置。
 
@@ -357,7 +352,7 @@ plist 设置 `RunAtLoad`、`KeepAlive`，日志写到 `~/Library/Logs/pi-steward
 | --- | --- |
 | 登录 | 访问密码；中英切换 |
 | 项目任务列表（首页） | 按状态分组；待领取写明在等什么；已完成默认折叠；「需要回应」「待核对」标记 |
-| 任务详情 | 独立页面。主操作随状态变化（安排开始、撤回、验收、返修、重新安排、取消）；四块内容（目标与约定、当前进展、需要处理、已有交付及历史版本）加执行记录；显示执行电脑、会话标识和 tmux 会话名，便于在 Pi Reach 或终端里找到会话 |
+| 任务详情 | 独立页面。主操作随状态变化（安排开始、撤回、验收、返修、重新安排、取消），可用弹窗编辑。显示目标与约定、当前进展、需要处理、已有交付及历史版本、执行记录。提供执行电脑、会话标识和 tmux 会话名，便于在 Pi Reach 或终端找到会话 |
 | 新建任务 | 只有标题必填；Agent 默认 Pi，Claude Code 显示为"暂不支持"；执行电脑默认"跟随上次使用" |
 | 电脑 | 在线状态、名额占用、正在执行的任务、登记的项目 |
 
@@ -370,7 +365,7 @@ plist 设置 `RunAtLoad`、`KeepAlive`，日志写到 `~/Library/Logs/pi-steward
 
 - **镜像**：`docker/platform.Dockerfile`，参照 Pi Reach Relay 的多阶段构建写法。构建阶段先构建 `contract` 和 `web`，再构建 `platform`，然后用 `pnpm deploy --prod` 产出运行文件，前端静态文件放进镜像。运行阶段用 `node` 用户，带 `/health` 健康检查。
 - **持久化**：SQLite 数据库放在卷 `/data` 中。
-- **环境变量**：`STEWARD_DATA_DIR`、`STEWARD_ACCESS_PASSWORD_HASH`、`STEWARD_PUBLIC_ORIGIN`（用于 Origin 检查和 Cookie）、`PORT`。
+- **环境变量**：`STEWARD_DATA_DIR`、`STEWARD_ACCESS_PASSWORD_HASH`、`STEWARD_PUBLIC_ORIGIN`（用于 Origin 检查和 Cookie）、`PORT`。本地测试可设置 `STEWARD_ALLOW_LOCAL_HTTP=1`，监听地址限回环。反向代理若会覆盖 `X-Steward-Client-IP` 为可信客户端地址，且平台端口仅由可信代理访问，可设置 `STEWARD_TRUST_PROXY_CLIENT_IP=1`，登录限流按该地址区分。
 - **管理命令**：用 `docker compose exec platform node dist/admin.js <命令>` 执行：
   - `hash-password`：生成访问密码哈希；
   - `machine:add <名称>`：添加电脑，令牌只显示一次；
@@ -443,7 +438,7 @@ M1 完成后，M2 和 M3 可以并行。
 3. **Pi 1.5.2 的扩展接口**：`registerTool`、`ctx.shutdown()` 和工具参数写法，在 1.5.2 中是否与探针扩展一致。
 4. **首条消息作为命令行参数**：长度和特殊字符是否有问题。如有，改为让 Pi 先读背景文件或调用 `steward_task`。
 5. **`waiting` 字段**：首版只区分电脑离线、名额已满、未指定电脑三种原因，是否够用。
-6. **会话 Cookie 的 `Secure` 属性**：本地开发用 http 时需要关掉，按环境变量切换。
+6. **会话 Cookie 的 `Secure` 属性**：生产模式固定开启。本机 HTTP 测试需显式启用，并绑定回环地址。
 
 已知风险：
 

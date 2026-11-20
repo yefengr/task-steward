@@ -1,0 +1,104 @@
+import { randomUUID } from 'node:crypto';
+import { expect, it } from 'vitest';
+import * as c from '@pi-steward/contract';
+import { delivery, errorCode, project, request, useFixture } from './fixture.js';
+
+const setup = useFixture();
+
+it('创建、编辑、版本冲突、安排、撤回、退出中断、重新安排以及取消', async () => {
+  const x = await setup();
+  expect((await x.app.request('/health')).status).toBe(200);
+  expect((await x.heartbeat()).status).toBe(200);
+  const task = await x.create();
+  expect(task).toMatchObject({ status: 'unscheduled', version: 1, position: 1 });
+  await errorCode(await x.action(task.id, 'unschedule'), 409, 'conflict');
+  await errorCode(await x.action(task.id, 'reschedule'), 409, 'conflict');
+  await errorCode(await x.action(task.id, 'accept', { deliveryId: randomUUID() }), 409, 'conflict');
+  const changed = await x.web(`/tasks/${task.id}`, { version: task.version, goal: '目标' }, 'PATCH');
+  expect(c.webTaskMutationResponseSchema.parse(await changed.json()).task).toMatchObject({ goal: '目标', version: 2, status: 'unscheduled' });
+  await errorCode(await x.web(`/tasks/${task.id}`, { version: task.version, goal: '旧版本' }, 'PATCH'), 409, 'conflict');
+  expect((await x.action(task.id, 'schedule')).status).toBe(200);
+  await errorCode(await x.action(task.id, 'schedule'), 409, 'conflict');
+  expect((await x.action(task.id, 'unschedule')).status).toBe(200);
+  expect((await x.detail(task.id)).task.status).toBe('unscheduled');
+  expect((await x.action(task.id, 'schedule')).status).toBe(200);
+  const a = await x.claimed();
+  expect(a).toMatchObject({ taskId: task.id, sessionId: `steward-${a.id}`, restoreSession: false, kind: 'new' });
+  const started = request({ tmuxSession: `steward-${a.id}`, startedAt: x.now() });
+  expect((await x.launcher(`/attempts/${a.id}/started`, started)).status).toBe(200);
+  await errorCode(await x.launcher(`/attempts/${a.id}/started`, request({ ...started, requestId: randomUUID(), startedAt: x.now() + 1 })), 409, 'conflict');
+  expect((await x.exit(a.id)).status).toBe(200);
+  expect((await x.detail(task.id)).task.status).toBe('interrupted');
+  expect((await x.action(task.id, 'reschedule')).status).toBe(200);
+  expect((await x.action(task.id, 'cancel')).status).toBe(200);
+  await errorCode(await x.action(task.id, 'cancel'), 409, 'conflict');
+  const end = await x.detail(task.id);
+  expect(end.task.status).toBe('cancelled');
+  expect(end.attempts[0]).toMatchObject({ result: 'interrupted', tmuxSession: `steward-${a.id}`, machineName: 'Mac' });
+  expect(end.events.map(({ kind }) => kind)).toEqual(['created', 'updated', 'schedule', 'unschedule', 'schedule', 'claimed', 'started', 'exited', 'reschedule', 'cancel']);
+  await errorCode(await x.web(`/tasks/${task.id}`, { version: end.task.version, title: '已取消' }, 'PATCH'), 409, 'conflict');
+});
+
+it('返修优先、复用 Pi 会话、交付仅一次并允许验收与退出交错', async () => {
+  const x = await setup();
+  await x.heartbeat(1);
+  const ordinary = await x.create('普通');
+  const job = await x.create('返修');
+  await x.action(job.id, 'schedule');
+  const a = await x.claimed();
+  await x.action(ordinary.id, 'schedule');
+  const report = request(delivery);
+  const d1 = c.agentDeliveryResponseSchema.parse(await (await x.agent(a.id, '/deliveries', report)).json());
+  expect(d1.version).toBe(1);
+  await errorCode(await x.agent(a.id, '/deliveries', request(delivery)), 409, 'conflict');
+  await errorCode(await x.action(job.id, 'accept', { deliveryId: randomUUID() }), 409, 'conflict');
+  expect((await x.action(job.id, 'rework', { deliveryId: d1.deliveryId, feedback: '追加验收' })).status).toBe(200);
+  await errorCode(await x.action(job.id, 'unschedule'), 409, 'conflict');
+  expect((await x.detail(job.id)).task).toMatchObject({ status: 'queued', reworkPending: true, waiting: 'previous_attempt_active' });
+  const list = c.webProjectTasksResponseSchema.parse(await (await x.web(`/projects/${project.id}/tasks`)).json());
+  expect(list.tasks.map(({ waiting }) => waiting)).toEqual(['slots_full', 'previous_attempt_active']);
+  expect(c.launcherClaimResponseSchema.parse(await (await x.claim()).json())).toEqual({ attempt: null });
+  const exit = request({ exitCode: null, endedAt: x.now() });
+  expect((await x.exit(a.id, exit)).status).toBe(200);
+  expect(await (await x.agent(a.id, '/deliveries', report)).json()).toEqual(d1);
+  await errorCode(await x.agent(a.id, '/progress', request({ text: '已退出' })), 409, 'attempt_ended');
+  const b = await x.claimed();
+  expect(b).toMatchObject({ taskId: job.id, sessionId: a.sessionId, restoreSession: true, kind: 'rework' });
+  expect(await (await x.exit(a.id, exit)).json()).toEqual({ ok: true });
+  expect((await x.detail(job.id)).task.status).toBe('running');
+  const background = c.agentContextResponseSchema.parse(await (await x.agent(b.id, '/context')).json());
+  expect(background.deliveries[0]).toMatchObject({ review: 'rework', feedback: '追加验收', baseCommit: 'base', commit: 'result', reportRef: 'report.md' });
+  const d2 = c.agentDeliveryResponseSchema.parse(await (await x.agent(b.id, '/deliveries', request(delivery))).json());
+  expect(d2.version).toBe(2);
+  await errorCode(await x.action(job.id, 'accept', { deliveryId: d1.deliveryId }), 409, 'conflict');
+  expect((await x.action(job.id, 'accept', { deliveryId: d2.deliveryId })).status).toBe(200);
+  expect((await x.exit(b.id)).status).toBe(200);
+  const end = await x.detail(job.id);
+  expect(end.task.status).toBe('done');
+  expect(end.attempts.map(({ result }) => result)).toEqual(['delivered', 'delivered']);
+  await errorCode(await x.action(job.id, 'cancel'), 409, 'conflict');
+  await errorCode(await x.web(`/tasks/${job.id}`, { version: end.task.version, notes: '关闭' }, 'PATCH'), 409, 'conflict');
+  expect((await x.claimed()).taskId).toBe(ordinary.id);
+});
+
+it.each(['running', 'review', 'queued'] as const)('取消 %s 时保留任务状态并终止活动尝试', async (state) => {
+  const x = await setup();
+  await x.heartbeat();
+  const task = await x.create();
+  await x.action(task.id, 'schedule');
+  const a = await x.claimed();
+  const progress = request({ text: '已记录' });
+  expect((await x.agent(a.id, '/progress', progress)).status).toBe(200);
+  if (state !== 'running') {
+    const d = c.agentDeliveryResponseSchema.parse(await (await x.agent(a.id, '/deliveries', request(delivery))).json());
+    if (state === 'queued') await x.action(task.id, 'rework', { deliveryId: d.deliveryId, feedback: '返修' });
+  }
+  expect((await x.action(task.id, 'cancel')).status).toBe(200);
+  expect(await (await x.agent(a.id, '/progress', progress)).json()).toEqual({ ok: true });
+  await errorCode(await x.agent(a.id, '/decisions', request({ text: '新决定', confirmedByUser: false })), 409, 'attempt_ended');
+  expect(await (await x.heartbeat()).json()).toEqual({ directives: [{ attemptId: a.id, tmuxSession: `steward-${a.id}`, action: 'cancel' }] });
+  expect((await x.exit(a.id)).status).toBe(200);
+  const end = await x.detail(task.id);
+  expect(end.task.status).toBe('cancelled');
+  expect(end.attempts[0]).toMatchObject({ cancelRequested: true, result: 'cancelled' });
+});

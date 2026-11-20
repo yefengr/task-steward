@@ -1,0 +1,78 @@
+import { expect, it } from 'vitest';
+import * as c from '../src/index.js';
+
+const id = '12345678-1234-4123-8123-123456789abc';
+const tmuxSession = `steward-${id}`;
+const request = { requestId: id };
+const ok = { ok: true };
+const projectId = 'pi-steward';
+const taskContent = { title: '标题', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null };
+const task = { ...taskContent, id, projectId, status: 'queued', reworkPending: false, position: 1, createdBy: 'user',
+  version: 1, createdAt: 100, updatedAt: 200, waiting: null, needsVerification: false, needsResponse: false };
+const attempt = { id, taskId: id, machineId: id, machineName: 'Mac', agent: 'pi', kind: 'new', sessionId: tmuxSession,
+  tmuxSession: null, claimedAt: 100, startedAt: null, leaseExpiresAt: 200, cancelRequested: false,
+  endedAt: null, exitCode: null, result: null, needsVerification: false };
+const deliveryContent = { summary: '交付', done: ['完成'], notCovered: [], verification: [], howTo: [], issues: [], commit: 'result' };
+const delivery = { ...deliveryContent, id, taskId: id, attemptId: id, version: 1, review: null, feedback: null, reviewedAt: null, createdAt: 100 };
+const progress = { id, taskId: id, attemptId: id, text: '说明', createdAt: 100 };
+const decision = { ...progress, confirmedByUser: true };
+const question = { ...progress, context: '背景', status: 'open', updatedAt: 100 };
+const event = { id, taskId: id, attemptId: null, actor: 'user', kind: 'scheduled', payload: { to: 'queued' }, createdAt: 100 };
+const project = { id: projectId, name: 'Steward', lastMachineId: null, createdAt: 100,
+  counts: { unscheduled: 0, queued: 1, running: 0, review: 0, done: 0, interrupted: 0, cancelled: 0 } };
+const machine = { id, name: 'Mac', online: true, slots: 1, occupiedSlots: 0, lastSeenAt: 100, launcherVersion: 'test', revokedAt: null,
+  projects: [{ id: projectId, name: project.name }], activeTasks: [] };
+const claimed = { id, taskId: id, projectId, agent: 'pi', sessionId: tmuxSession, restoreSession: false, displayName: '标题', kind: 'new' };
+const projectRegistration = { id: projectId, name: project.name, path: '/work/项目' };
+const heartbeat = { ...request, launcherVersion: 'test', slots: 1, projects: [projectRegistration], attempts: [{ id, tmuxSession, running: true }] };
+const context = { task: { id, projectId, title: task.title, goal: '', acceptance: '', notes: '' }, attempt: { id, kind: 'new' },
+  workspace: { path: projectRegistration.path, requirements: ['按项目规范执行'] }, decisions: [decision], deliveries: [delivery], questions: [question] };
+
+type SchemaName = Extract<keyof typeof c, `${string}Schema`>;
+const samples = {
+  agentSchema: ['pi', 'other'], taskStatusSchema: ['review', 'needs_verification'], errorCodeSchema: ['conflict', 'unknown'],
+  errorResponseSchema: [{ error: { code: 'forbidden', message: 'Denied' } }, { error: { code: 'unknown', message: 'Failure' } }],
+  uuidSchema: [id, projectId], projectIdSchema: [projectId, '../project'], timestampSchema: [0, -1],
+  textSchema: ['', null], nonEmptyTextSchema: ['正文', '\n '], machineTokenSchema: [`stm_${'A'.repeat(43)}`, 'stm_short'],
+  tmuxSessionSchema: [tmuxSession, 'another-session'], emptyRequestSchema: [{}, { extra: true }],
+  okResponseSchema: [ok, { ok: false }], requestIdSchema: [request, { requestId: '' }],
+  titleSchema: [' 标题 ', ' '], attemptKindSchema: ['rework', 'resume'], attemptResultSchema: ['delivered', 'done'],
+  waitingReasonSchema: ['previous_attempt_active', 'rework'], questionStatusSchema: ['open', 'unknown'], slotsSchema: [0, -1],
+  taskContentSchema: [taskContent, { ...taskContent, machineId: '' }], taskSchema: [task, { ...task, needsVerification: 'yes' }],
+  attemptSchema: [attempt, { ...attempt, leaseExpiresAt: null }], deliveryContentSchema: [deliveryContent, { ...deliveryContent, done: '完成' }],
+  deliverySchema: [delivery, { ...delivery, version: 0 }], decisionSchema: [decision, { ...decision, confirmedByUser: 1 }],
+  progressSchema: [progress, { ...progress, text: '' }], questionSchema: [question, { ...question, status: 'cancelled' }],
+  taskEventSchema: [event, { ...event, actor: 'machine' }],
+  webLoginRequestSchema: [{ password: 'schema-only' }, { password: '' }], webLoginResponseSchema: [ok, {}],
+  webLogoutRequestSchema: [{}, { extra: true }], webLogoutResponseSchema: [ok, {}],
+  webMeResponseSchema: [{ authenticated: false }, { authenticated: 0 }], webProjectSchema: [project, { ...project, counts: {} }],
+  webProjectsResponseSchema: [{ projects: [project] }, [project]], webProjectTasksResponseSchema: [{ tasks: [task] }, { tasks: null }],
+  webTaskDetailResponseSchema: [{ task, progress: [progress], decisions: [decision], questions: [question], deliveries: [delivery],
+    attempts: [attempt], events: [event] }, { task }],
+  webCreateTaskRequestSchema: [{ title: '先记标题', projectId }, { title: '缺少项目' }],
+  webUpdateTaskRequestSchema: [{ version: 1, machineId: null }, { version: 1 }], webTaskMutationResponseSchema: [{ task }, task],
+  webTaskActionRequestSchema: [{}, { unexpected: 1 }], webAcceptRequestSchema: [{ deliveryId: id }, { deliveryId: 'invalid' }],
+  webReworkRequestSchema: [{ deliveryId: id, feedback: '补充验证' }, { deliveryId: id, feedback: ' ' }],
+  webMachineSchema: [machine, { ...machine, occupiedSlots: -1 }], webMachinesResponseSchema: [{ machines: [machine] }, [machine]],
+  launcherHeartbeatRequestSchema: [heartbeat, { ...heartbeat, projects: [projectRegistration, projectRegistration] }],
+  launcherHeartbeatResponseSchema: [{ directives: [{ attemptId: id, tmuxSession, action: 'unknown' }] }, { directives: [{ attemptId: id, tmuxSession, action: 'stop' }] }],
+  launcherClaimRequestSchema: [request, { ...request, slots: 1 }], claimedAttemptSchema: [claimed, { ...claimed, agent: 'claude' }],
+  launcherClaimResponseSchema: [{ attempt: null }, { attempt: { ...claimed, firstMessage: 'unexpected' } }],
+  launcherStartedRequestSchema: [{ ...request, tmuxSession, startedAt: 100 }, { ...request, tmuxSession }],
+  launcherExitedRequestSchema: [{ ...request, exitCode: null, endedAt: 100 }, { ...request, endedAt: 100, exitCode: '0' }],
+  launcherStartedResponseSchema: [ok, {}], launcherExitedResponseSchema: [ok, {}],
+  agentContextResponseSchema: [context, { ...context, decisions: [{ ...decision, confirmedByUser: false }] }],
+  agentProgressRequestSchema: [{ ...request, text: '进展' }, { ...request, text: ' ' }], agentProgressResponseSchema: [ok, {}],
+  agentCreateQuestionRequestSchema: [{ ...request, text: '问题', context: '' }, { ...request, text: '问题' }],
+  agentCreateQuestionResponseSchema: [{ questionId: id }, { id }],
+  agentUpdateQuestionRequestSchema: [{ ...request, status: 'withdrawn' }, { ...request, status: 'open' }], agentUpdateQuestionResponseSchema: [ok, {}],
+  agentDecisionRequestSchema: [{ ...request, text: '决定', confirmedByUser: false }, { ...request, text: '决定' }], agentDecisionResponseSchema: [ok, {}],
+  agentDeliveryRequestSchema: [{ ...request, ...deliveryContent }, deliveryContent],
+  agentDeliveryResponseSchema: [{ deliveryId: id, version: 1 }, { deliveryId: id, version: 0 }],
+} satisfies Record<SchemaName, [unknown, unknown]>;
+
+it.each(Object.entries(samples))('%s 接受合法样例并拒绝非法样例', (name, [valid, invalid]) => {
+  const schema = c[name as SchemaName];
+  expect(schema.safeParse(valid).success).toBe(true);
+  expect(schema.safeParse(invalid).success).toBe(false);
+});

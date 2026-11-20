@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createApp } from './app.js';
@@ -14,9 +16,11 @@ function start(env: NodeJS.ProcessEnv) {
   const port = Number(env.PORT ?? 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid platform port');
   const hostname = secure ? '0.0.0.0' : new URL(publicOrigin).hostname === '[::1]' ? '::1' : '127.0.0.1';
+  const defaultWebDir = fileURLToPath(new URL('../../web/dist', import.meta.url));
+  const webDir = env.STEWARD_WEB_DIR ?? (existsSync(defaultWebDir) ? defaultWebDir : undefined);
   const store = openStore(databasePath(env));
   try {
-    const app = createApp({ store, publicOrigin, accessPasswordHash, allowLocalHttp,
+    const app = createApp({ store, publicOrigin, accessPasswordHash, allowLocalHttp, webDir,
       trustProxyClientIp: env.STEWARD_TRUST_PROXY_CLIENT_IP === '1',
       peerIp: (context) => getConnInfo(context).remote.address,
       onInternalError: () => console.error('Platform request failed'),

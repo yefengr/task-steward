@@ -10,7 +10,7 @@ it('按显式、上次、单机选路，拒绝未登记项目和 Claude', async 
   await x.heartbeat(3);
   await x.heartbeat(3, [project], [], x.otherToken);
   const ambiguous = await x.create('未指定');
-  await errorCode(await x.action(ambiguous.id, 'schedule'), 409, 'conflict');
+  await errorCode(await x.action(ambiguous.id, 'schedule'), 409, 'machine_required');
   const second = await x.create('指定', { machineId: x.otherId });
   await x.action(second.id, 'schedule');
   expect(await responseOf(c.launcherClaimResponseSchema, await x.claim())).toEqual({ attempt: null });

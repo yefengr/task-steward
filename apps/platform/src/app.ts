@@ -8,6 +8,7 @@ import { ApiError, reject } from './errors.js';
 import type { Store } from './store.js';
 import { mountWeb } from './web-routes.js';
 import { mountMachineRoutes } from './machine-routes.js';
+import { mountStaticWeb } from './static-web.js';
 
 export interface AppOptions {
   store: Store;
@@ -18,6 +19,7 @@ export interface AppOptions {
   peerIp?: (context: Context) => string | undefined;
   now?: () => number;
   onInternalError?: () => void;
+  webDir?: string;
 }
 export const routeParam = <T>(value: unknown, schema: z.ZodType<T>) => {
   const result = schema.safeParse(value);
@@ -50,7 +52,10 @@ export function createApp(options: AppOptions) {
     onError: (context) => context.json(errorBody('invalid_request', 'Request body too large'), 400) }));
   app.route('/api/v1/web', mountWeb(options, now));
   app.route('/api/v1', mountMachineRoutes(options.store, now));
-  app.notFound((context) => context.json(errorBody('not_found', 'Route not found'), 404));
+  if (options.webDir) mountStaticWeb(app, options.webDir);
+  app.notFound((context) => context.req.path === '/api' || context.req.path.startsWith('/api/')
+    ? context.json(errorBody('not_found', 'Route not found'), 404)
+    : options.webDir ? context.text('Not found', 404) : context.json(errorBody('not_found', 'Route not found'), 404));
   app.onError((error, context) => {
     if (error instanceof ApiError) return context.json(errorBody(error.code, error.message), error.status);
     if (error instanceof HTTPException && error.status === 400) {

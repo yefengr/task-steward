@@ -1,0 +1,29 @@
+{
+  "name": "@pi-steward/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@mantine/core": "9.5.2",
+    "@mantine/hooks": "9.5.2",
+    "@pi-steward/contract": "workspace:*",
+    "lucide-react": "1.33.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "wouter": "3.13.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0",
+    "@types/node": "catalog:",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "catalog:pwa",
+    "vite": "8.2.4"
+  }
+}

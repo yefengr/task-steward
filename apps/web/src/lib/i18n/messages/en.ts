@@ -1,0 +1,57 @@
+export const en = {
+  common: {
+    projects: 'Projects', machines: 'Machines', newTask: 'New task', editTask: 'Edit task', back: 'Back',
+    openMenu: 'Open menu', close: 'Close', login: 'Sign in', logout: 'Sign out', language: 'Switch language', languageOption: '中文',
+    theme: 'Appearance', system: 'System', light: 'Light', save: 'Save', create: 'Create task', dismiss: 'Back',
+    loading: 'Loading…', retry: 'Retry', unknown: '—', notFound: 'Page not found', goHome: 'Back to home',
+  },
+  auth: { hint: 'Enter the access password to open the task console.', password: 'Access password', incorrect: 'The access password is incorrect.' },
+  errors: {
+    network: 'Could not reach the platform. Please retry.', invalidResponse: 'The platform returned an unexpected response.',
+    unauthorized: 'Your session has expired. Please sign in again.', forbidden: 'The platform rejected this action.',
+    not_found: 'This item could not be found.', invalid_request: 'Check your input and try again.',
+    conflict: 'The task changed before this action could be saved. Check its current status and try again.',
+    attempt_ended: 'This attempt has ended.', rate_limited: 'Too many attempts. Try again shortly.',
+    internal_error: 'The platform could not complete this action. Try again shortly.',
+    machine_required: 'Edit the task and select an execution machine before scheduling it.',
+    editConflict: 'The task version changed. Your input is preserved. Check the latest task details before continuing.',
+    useLatest: 'Review latest version and keep my input', compareCurrent: 'Current task on the platform',
+  },
+  project: {
+    none: 'No projects yet', noneHint: 'Once the launcher registers a project, you can create tasks here.', empty: 'This project has no tasks yet.',
+    noMachines: 'No execution machines are registered for this project', machines: 'Execution machines', open: 'Open tasks',
+  },
+  statuses: { unscheduled: 'Unscheduled', queued: 'Queued', running: 'Running', review: 'Awaiting review', done: 'Completed', interrupted: 'Interrupted', cancelled: 'Cancelled' },
+  waiting: {
+    ready: 'Waiting for the launcher to claim this task', previous_attempt_active: 'The previous attempt is still finishing',
+    machine_unassigned: 'No execution machine selected', machine_project_unregistered: 'The execution machine has not registered this project',
+    machine_offline: 'The execution machine is offline', slots_full: 'All execution slots are occupied',
+  },
+  form: { title: 'Task title', goal: 'Goal', acceptance: 'Acceptance criteria', notes: 'Notes', agent: 'Agent', machine: 'Execution machine',
+    auto: 'Use last machine', claude: 'Claude Code (not supported yet)', feedback: 'Rework feedback', required: 'This field is required.', invalid: 'Check the length of the text.' },
+  machine: {
+    none: 'No machines are registered yet.', online: 'Online', offline: 'Offline', revoked: 'Revoked', lastSeen: 'Last heartbeat',
+    slots: 'Slots used', active: 'Active tasks', idle: 'No active tasks.', projects: 'Registered projects',
+  },
+  task: {
+    needsResponse: 'Needs a response', needsVerification: 'Needs verification', reworkPending: 'Rework queued', createdByAgent: 'Created by Agent',
+    attention: 'Needs attention', verificationHint: 'The execution lease expired. Waiting for the launcher to verify the attempt.',
+    interruptedHint: 'The last attempt ended without a delivery. You can schedule it again.', goalSection: 'Goal and agreements',
+    decisions: 'Recorded decisions', confirmed: 'Confirmed by user', suggested: 'Unconfirmed', progress: 'Current progress', noProgress: 'No progress reported yet.',
+    delivery: 'Delivery', noDelivery: 'No deliveries yet.', history: 'Version history', latest: 'Latest', accepted: 'Accepted', reworked: 'Rework requested',
+    done: 'Completed work', notCovered: 'Not covered', verification: 'Verification', howTo: 'How to use', issues: 'Known issues',
+    baseCommit: 'Base commit', commit: 'Commit', reportRef: 'Report reference', records: 'Execution records', attempts: 'Attempts', events: 'Task events',
+    attempt: 'Attempt ID', session: 'Session ID', tmux: 'tmux session', started: 'Started', ended: 'Ended', result: 'Result',
+    kindNew: 'New attempt', kindRework: 'Rework attempt', resultDelivered: 'Delivered', resultInterrupted: 'Interrupted', resultCancelled: 'Cancelled',
+    resultActive: 'Still active', resultClosing: 'Cancelling', exitCode: 'Exit code', noRecords: 'No execution records yet.',
+    questionStatus: { open: 'Awaiting response', resolved: 'Resolved', withdrawn: 'Withdrawn' },
+    actors: { user: 'User', launcher: 'Launcher', agent: 'Agent' },
+    event: { created: 'Task created', updated: 'Task edited', schedule: 'Scheduled', unschedule: 'Schedule withdrawn', reschedule: 'Rescheduled',
+      cancel: 'Task cancelled', accept: 'Accepted', rework: 'Rework requested', claimed: 'Task claimed', started: 'Execution started', exited: 'Execution exited', delivered: 'Delivery submitted' },
+  },
+  actions: { schedule: 'Schedule', unschedule: 'Withdraw', reschedule: 'Reschedule', cancel: 'Cancel task', accept: 'Accept delivery', rework: 'Request rework',
+    cancelHint: 'A cancelled task cannot be scheduled again. If it is still running, the launcher will stop the current attempt.',
+    acceptHint: 'Accepting this delivery marks the task complete.', reworkHint: 'Describe what needs to change. The task will return to the queue.' },
+};
+
+export type Messages = typeof en;

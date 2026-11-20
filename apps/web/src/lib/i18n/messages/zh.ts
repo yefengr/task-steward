@@ -1,0 +1,55 @@
+import type { Messages } from './en';
+
+export const zh: Messages = {
+  common: {
+    projects: '项目', machines: '电脑', newTask: '新建任务', editTask: '编辑任务', back: '返回',
+    openMenu: '打开菜单', close: '关闭', login: '登录', logout: '退出登录', language: '切换语言', languageOption: 'English',
+    theme: '外观', system: '跟随系统', light: '浅色', save: '保存', create: '创建任务', dismiss: '返回',
+    loading: '正在加载…', retry: '重试', unknown: '—', notFound: '找不到此页面', goHome: '返回首页',
+  },
+  auth: { hint: '输入访问密码，进入任务控制台。', password: '访问密码', incorrect: '访问密码不正确。' },
+  errors: {
+    network: '无法连接平台，请重试。', invalidResponse: '平台返回的数据格式不正确。', unauthorized: '登录已过期，请重新登录。',
+    forbidden: '平台拒绝了此操作。', not_found: '找不到此数据，可能已不存在。', invalid_request: '请检查输入后重试。',
+    conflict: '任务已变化，此操作未保存。请核对最新状态后重试。', attempt_ended: '本次执行已结束。',
+    rate_limited: '尝试次数过多，请稍后重试。', internal_error: '平台暂时无法完成此操作，请稍后重试。',
+    machine_required: '请先在编辑中指定执行电脑，再安排任务。',
+    editConflict: '任务版本已变化。输入已保留，请核对页面上的最新内容后处理。',
+    useLatest: '核对最新版本并保留输入',
+    compareCurrent: '平台当前内容',
+  },
+  project: {
+    none: '还没有项目', noneHint: '启动器登记项目后，就可以在这里新建任务。', empty: '这个项目还没有任务。',
+    noMachines: '暂未登记执行电脑', machines: '执行电脑', open: '未关闭任务',
+  },
+  statuses: { unscheduled: '未安排', queued: '待领取', running: '进行中', review: '待验收', done: '已完成', interrupted: '已中断', cancelled: '已取消' },
+  waiting: {
+    ready: '等待启动器领取', previous_attempt_active: '上次执行仍在收尾', machine_unassigned: '尚未指定执行电脑',
+    machine_project_unregistered: '执行电脑未登记此项目', machine_offline: '执行电脑离线', slots_full: '执行名额已满',
+  },
+  form: { title: '任务标题', goal: '目标', acceptance: '验收要求', notes: '说明', agent: 'Agent', machine: '执行电脑',
+    auto: '跟随上次使用', claude: 'Claude Code（暂不支持）', feedback: '返修反馈', required: '请填写此项。', invalid: '请检查内容长度。' },
+  machine: {
+    none: '还没有登记电脑。', online: '在线', offline: '离线', revoked: '已撤销', lastSeen: '最近心跳', slots: '名额占用',
+    active: '正在执行的任务', idle: '没有活动任务。', projects: '已登记的项目',
+  },
+  task: {
+    needsResponse: '需要回应', needsVerification: '待核对', reworkPending: '返修排队', createdByAgent: '由 Agent 创建',
+    attention: '需要处理', verificationHint: '执行租约已过期，等待启动器核对。',
+    interruptedHint: '上次执行结束时没有交付，可重新安排。', goalSection: '目标与约定', decisions: '已记录决定',
+    confirmed: '用户已确认', suggested: '待确认', progress: '当前进展', noProgress: '尚无进展回报。',
+    delivery: '交付', noDelivery: '尚无交付。', history: '历史版本', latest: '最新版', accepted: '验收通过', reworked: '已要求返修',
+    done: '已完成', notCovered: '未覆盖', verification: '验证', howTo: '使用方式', issues: '已知问题',
+    baseCommit: '基准提交', commit: '提交', reportRef: '报告位置', records: '执行记录', attempts: '执行尝试', events: '任务事件',
+    attempt: '尝试编号', session: '会话标识', tmux: 'tmux 会话名', started: '开始', ended: '结束', result: '执行结果',
+    kindNew: '新执行', kindRework: '返修执行', resultDelivered: '已交付', resultInterrupted: '已中断', resultCancelled: '已取消',
+    resultActive: '尚未结束', resultClosing: '正在取消', exitCode: '退出码', noRecords: '尚无执行记录。',
+    questionStatus: { open: '待回应', resolved: '已解决', withdrawn: '已撤回' },
+    actors: { user: '用户', launcher: '启动器', agent: 'Agent' },
+    event: { created: '创建任务', updated: '编辑任务', schedule: '安排开始', unschedule: '撤回安排', reschedule: '重新安排',
+      cancel: '取消任务', accept: '验收通过', rework: '要求返修', claimed: '领取任务', started: '启动执行', exited: '执行退出', delivered: '提交交付' },
+  },
+  actions: { schedule: '安排开始', unschedule: '撤回', reschedule: '重新安排', cancel: '取消任务', accept: '验收通过', rework: '返修',
+    cancelHint: '取消后任务不能重新安排。如果仍在运行，启动器会结束本次执行。',
+    acceptHint: '通过验收后，任务将标记为已完成。', reworkHint: '写明需要调整的内容，任务将重新进入待领取队列。' },
+};

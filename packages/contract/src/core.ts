@@ -7,7 +7,8 @@ export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export const agentSchema = z.enum(['pi', 'claude']);
 export type Agent = z.infer<typeof agentSchema>;
 export const errorCodeSchema = z.enum([
-  'unauthorized', 'forbidden', 'not_found', 'invalid_request', 'conflict', 'attempt_ended', 'rate_limited', 'internal_error',
+  'unauthorized', 'forbidden', 'not_found', 'invalid_request', 'conflict', 'machine_required',
+  'attempt_ended', 'rate_limited', 'internal_error',
 ]);
 export type ErrorCode = z.infer<typeof errorCodeSchema>;
 export const errorResponseSchema = z.strictObject({

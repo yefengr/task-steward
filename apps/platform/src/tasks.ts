@@ -51,7 +51,7 @@ export function taskAction(store: Store, id: string, action: TaskAction, now: nu
   }
   if (action === 'schedule' || action === 'reschedule' || action === 'rework') {
     if (task.agent === 'claude') reject('conflict', 'Claude tasks cannot be scheduled');
-    if (action !== 'rework' && !executionMachine(store, id)) reject('conflict', 'Select an execution machine first');
+    if (action !== 'rework' && !executionMachine(store, id)) reject('machine_required', 'Select an execution machine first');
   }
   if (review) {
     const latest = store.get<{ id: string; review: string | null }>('SELECT id, review FROM deliveries WHERE task_id=? ORDER BY version DESC LIMIT 1', id);

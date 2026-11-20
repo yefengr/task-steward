@@ -26,18 +26,27 @@ docker compose --env-file /path/to/private-env -f docker/compose.example.yml up 
 
 平台使用 `/data` 下的 SQLite 文件和 WAL。Compose 命名卷保留任务和会话。确认容器 `/health` 正常后，从 HTTPS 域名登录。首次启动会自动应用已有迁移。备份时，在同一 Compose 服务里执行 `node dist/admin.js backup /data/<新的快照文件>`，再把生成的快照复制到受控存储。恢复旧数据前先停服务，保留当前卷，使用快照建立新卷并验证健康检查及关键记录后再切换。
 
-## 自动部署和 npm 发布
+## 从本机更新服务器
 
-Steward 在 GitHub Actions 中提供两个手动触发的工作流，从 `main` 运行。
+在仓库根目录用 Docker 构建 `linux/amd64` 镜像，通过本机已配置的 SSH 连接传到服务器。将 `your-steward-host` 换成服务器的 SSH 别名。以下命令使用当前提交生成镜像标签，请在干净的工作区执行。
 
-- [Deploy Task Steward platform](../.github/workflows/deploy.yml) 先运行 `pnpm verify`，构建 `linux/amd64` 镜像并保留镜像 ID。`production` 作业通过 SSH 上传同一镜像，在服务器上备份 SQLite，用快照副本验证迁移与配对页，再更新原 Compose 服务。工作流检查正式站点的 HTTPS 健康响应和配对入口。
-- [Stage Task Steward on npm](../.github/workflows/release.yml) 先在 macOS 验证并打包，再用 GitHub OIDC 将 `@yefengr/steward` 提交到 npm 待审区。维护者在 npmjs.com 审核并完成双因素认证后，版本才会公开。批准需要新版平台支持的 CLI 前，先确认平台已部署。
+```bash
+set -euo pipefail
+ssh_target=your-steward-host
+image="pi-steward-platform:sha-$(git rev-parse HEAD)"
+docker build --platform linux/amd64 -f docker/platform.Dockerfile -t "$image" .
+image_id=$(docker image inspect --format '{{.Id}}' "$image")
+docker image save "$image" | ssh "$ssh_target" 'docker image load --quiet'
+ssh "$ssh_target" "bash -s -- '$image' '$image_id'" < scripts/deploy-platform.sh
+```
 
-启用前，将项目推送到 GitHub，在 `production` 环境设置 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY` 和 `DEPLOY_KNOWN_HOSTS`。SSH 主机公钥应从可信渠道核对。端口默认 22，其他端口通过环境变量 `DEPLOY_PORT` 配置。部署账号需要访问 `~/pi-steward` 和该项目的 Docker Compose 服务。生产审批可以在 `production` 环境配置。
+部署脚本适用于当前线上 Compose 布局。它备份数据库，用快照副本验证候选镜像，再更新服务并检查健康状态。脚本会打印 Compose 备份和数据库快照路径。数据库升级后，如需回退，先核对旧镜像支持的格式和升级后新增的数据，再选恢复方式。部署失败时保留已有数据和备份供核对。
 
-在 npm 配置 Trusted Publisher，绑定 GitHub 仓库、工作流文件 `release.yml` 与环境 `npm-release`，授予 staged publish 权限。如果该包的 npm 配置入口需要已有公开版本，先在维护者终端发布首版，再配置 Trusted Publisher。日常工作流通过 OIDC 认证。
+## npm 打包和发布
 
-部署脚本会打印对应的 Compose 备份和数据库快照路径。服务器使用同一份生产卷。数据库格式升级后，如需回退旧镜像，先核对旧镜像支持的格式以及升级后新增的数据，再选恢复方式。部署失败时保留现有数据和备份供核对。
+向 GitHub 默认分支推送后，[Pack Task Steward for npm](../.github/workflows/release.yml) 会在 macOS 上验证并打包。打开该次运行的 **Artifacts** 下载 `steward-npm-package`，解压可得到 `yefengr-steward-<版本>.tgz`。也可在 Actions 手动运行工作流生成安装包。
+
+需要发布新版本时，在 npm 配置 Trusted Publisher，绑定 `yefengr/task-steward`、`release.yml` 和环境 `npm-release`，授予 staged publish 权限。手动运行同一个工作流并勾选 `stage`，GitHub 会通过 OIDC 将新版本提交到 npm 待审区。维护者在 npmjs.com 审核并完成双因素认证后，版本才会公开。批准需要新版平台支持的 CLI 前，先确认平台已部署。
 
 ## 登记 Mac
 

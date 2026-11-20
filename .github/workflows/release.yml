@@ -1,7 +1,14 @@
-name: Stage Task Steward on npm
+name: Pack Task Steward for npm
 
 on:
+  push:
+    branches: ['**']
   workflow_dispatch:
+    inputs:
+      stage:
+        description: Submit the package to npm for review
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,7 +23,7 @@ concurrency:
 
 jobs:
   pack:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
@@ -26,14 +33,12 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
+      - uses: pnpm/action-setup@v6
       - name: Verify and pack
         run: |
-          corepack enable
           pnpm install --frozen-lockfile
           pnpm verify
-          pnpm pack:stew
-          mkdir "$RUNNER_TEMP/steward-npm"
-          cp .pi/tmp/yefengr-steward-*.tgz "$RUNNER_TEMP/steward-npm/"
+          pnpm pack:stew "$RUNNER_TEMP/steward-npm"
       - uses: actions/upload-artifact@v7
         with:
           name: steward-npm-package
@@ -42,6 +47,7 @@ jobs:
           retention-days: 3
 
   stage:
+    if: github.event_name == 'workflow_dispatch' && inputs.stage
     needs: pack
     runs-on: ubuntu-latest
     timeout-minutes: 10

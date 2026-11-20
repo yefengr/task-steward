@@ -1,14 +1,9 @@
-name: Pack Task Steward for npm
+name: Pack and publish Task Steward
 
 on:
   push:
     branches: ['**']
   workflow_dispatch:
-    inputs:
-      stage:
-        description: Submit the package to npm for review
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -46,8 +41,8 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  stage:
-    if: github.event_name == 'workflow_dispatch' && inputs.stage
+  publish:
+    if: github.event_name == 'push' && github.repository == 'yefengr/task-steward'
     needs: pack
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -58,13 +53,13 @@ jobs:
     steps:
       - uses: actions/setup-node@v7
         with:
-          # 使用自带 npm stage publish 的 Node 24 版本。
+          # 使用支持 npm OIDC 发布的 Node 和 npm 版本。
           node-version: 24.22.3
       - uses: actions/download-artifact@v8
         with:
           name: steward-npm-package
           path: ${{ runner.temp }}/steward-npm
-      - name: Submit package for review
+      - name: Publish new version to npm
         shell: bash
         run: |
           shopt -s nullglob
@@ -81,5 +76,13 @@ jobs:
             404) ;;
             *) echo "Could not check the npm version (HTTP $status)." >&2; exit 1 ;;
           esac
-          npm stage publish "$bundle" --access public --registry="$registry"
-          echo "@yefengr/steward@$version is staged. Review and approve it on npmjs.com." >> "$GITHUB_STEP_SUMMARY"
+          latest=$(curl -fsS --max-time 15 "$registry/@yefengr%2fsteward/latest" | jq -er '.version')
+          if ! jq -en --arg version "$version" --arg latest "$latest" '
+            def numbers: split(".") | map(tonumber);
+            ($version | numbers) > ($latest | numbers)
+          ' >/dev/null; then
+            echo "Version $version must be newer than npm latest ($latest)." >&2
+            exit 1
+          fi
+          npm publish "$bundle" --access public --registry="$registry"
+          echo "@yefengr/steward@$version published to npm." >> "$GITHUB_STEP_SUMMARY"

@@ -44,9 +44,11 @@ ssh "$ssh_target" "bash -s -- '$image' '$image_id'" < scripts/deploy-platform.sh
 
 ## npm 打包和发布
 
-向 GitHub 默认分支推送后，[Pack Task Steward for npm](../.github/workflows/release.yml) 会在 macOS 上验证并打包。打开该次运行的 **Artifacts** 下载 `steward-npm-package`，解压可得到 `yefengr-steward-<版本>.tgz`。也可在 Actions 手动运行工作流生成安装包。
+向 GitHub 默认分支推送后，[Pack and publish Task Steward](../.github/workflows/release.yml) 会在 macOS 上验证并打包。打开该次运行的 **Artifacts** 下载 `steward-npm-package`，解压可得到 `yefengr-steward-<版本>.tgz`。也可在 Actions 手动运行工作流生成安装包。
 
-需要发布新版本时，在 npm 配置 Trusted Publisher，绑定 `yefengr/task-steward`、`release.yml` 和环境 `npm-release`，授予 staged publish 权限。手动运行同一个工作流并勾选 `stage`，GitHub 会通过 OIDC 将新版本提交到 npm 待审区。维护者在 npmjs.com 审核并完成双因素认证后，版本才会公开。批准需要新版平台支持的 CLI 前，先确认平台已部署。
+发版时更新 [`apps/launcher/package.json`](../apps/launcher/package.json) 的 `version` 并推送到默认分支。打包通过后，工作流核对 npm 版本。已发布的版本会跳过，新版本会通过 GitHub OIDC 自动发布到 `latest`。
+
+首次启用时，在 npm 为 `@yefengr/steward` 配置 Trusted Publisher，绑定 `yefengr/task-steward`、`release.yml` 和环境 `npm-release`，启用 `npm publish` 权限。
 
 ## 登记 Mac
 

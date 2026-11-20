@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>任务平台原型 · Pi Steward</title>
+  <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+  <main class="doc" aria-label="原型说明">
+    <h1>Pi Steward 任务平台 · UX 原型</h1>
+    <p class="muted">2026-11-19。用于评审首版前端的信息结构与主要操作路径。数据与操作均为模拟，只保存在当前浏览器标签页中，可在侧栏底部重置。</p>
+
+    <h2>页面</h2>
+    <table>
+      <thead><tr><th>页面</th><th>评审重点</th></tr></thead>
+      <tbody>
+        <tr><td><a class="page-link" href="login.html">登录</a></td><td>访问密码登录；中英文切换</td></tr>
+        <tr><td><a class="page-link" href="inbox.html">需要我处理</a></td><td>首页：待回答、待验收、已中断三类，按等待时间排序</td></tr>
+        <tr><td><a class="page-link" href="project.html?p=pi-steward">项目任务列表</a></td><td>按状态分组；待领取写明在等什么；已完成折叠</td></tr>
+        <tr><td><a class="page-link" href="task.html?id=t2">任务详情</a></td><td>独立页面；主操作随状态变化；四块内容加执行记录</td></tr>
+        <tr><td><a class="page-link" href="machines.html">电脑</a></td><td>在线状态、名额占用、正在执行的任务与登记项目</td></tr>
+      </tbody>
+    </table>
+
+    <h2>建议走查路径</h2>
+    <table>
+      <thead><tr><th>路径</th><th>操作</th></tr></thead>
+      <tbody>
+        <tr><td>验收</td><td>需要我处理 → 「平台数据表设计」→ 查看 v2 交付与 v1 历史 → 验收 v2</td></tr>
+        <tr><td>返修</td><td>同一任务 → 返修 → 填写反馈 → 任务回到待领取，显示「返修，将优先领取」</td></tr>
+        <tr><td>回答问题</td><td>需要我处理 → 「会话深链参数设计」→ 在 Pi Reach 中打开（模拟提示）</td></tr>
+        <tr><td>中断处理</td><td>需要我处理 → 「设置页字号档位」→ 重新安排或取消任务</td></tr>
+        <tr><td>记录并安排</td><td>新建任务 → 只填标题 → 在项目列表的未安排中打开 → 安排开始 → 撤回到未安排</td></tr>
+        <tr><td>等待原因</td><td>项目列表的待领取分组：依赖未满足、名额已满；agent-tools 项目：电脑离线</td></tr>
+        <tr><td>Agent 创建的任务</td><td>项目列表 → 「整理 Web Push 订阅流程」，查看来源会话与修改记录</td></tr>
+      </tbody>
+    </table>
+
+    <h2>模拟与未包含</h2>
+    <ul>
+      <li>「在 Pi Reach 中打开」「在 Remote Control 中打开」只弹出提示，不实际跳转。</li>
+      <li>不包含：设置页、任务编辑页、依赖编辑、拖动排序、推送通知、深色与浅色手动切换（跟随系统）。</li>
+      <li>用户和 Agent 写的任务内容在英文界面下原样显示，不翻译，与 Pi Reach 的规则一致。</li>
+    </ul>
+  </main>
+</body>
+</html>

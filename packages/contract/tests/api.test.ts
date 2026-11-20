@@ -4,6 +4,9 @@ import * as c from '../src/index.js';
 const id = '12345678-1234-4123-8123-123456789abc';
 const tmuxSession = `steward-${id}`;
 const request = { requestId: id };
+const code = 'A123B456C7';
+const token = `stm_${'A'.repeat(43)}`;
+const tokenHash = 'a'.repeat(64);
 const ok = { ok: true };
 const projectId = 'pi-steward';
 const taskContent = { title: '标题', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null };
@@ -69,11 +72,29 @@ const samples = {
   agentDecisionRequestSchema: [{ ...request, text: '决定', confirmedByUser: false }, { ...request, text: '决定' }], agentDecisionResponseSchema: [ok, {}],
   agentDeliveryRequestSchema: [{ ...request, ...deliveryContent }, deliveryContent],
   agentDeliveryResponseSchema: [{ deliveryId: id, version: 1 }, { deliveryId: id, version: 0 }],
+  pairingCodeSchema: [code, code.toLowerCase()],
+  createPairingRequestSchema: [{ name: 'Mac', tokenHash }, { name: 'Mac', tokenHash, machineToken: token }],
+  createPairingResponseSchema: [{ code, expiresAt: 100 }, { code, expiresAt: -1 }],
+  pairingStatusRequestSchema: [{ machineToken: token }, { tokenHash }],
+  pairingStatusResponseSchema: [{ status: 'approved' }, { status: 'missing' }],
+  webPairingRequestSchema: [{ code }, { code, name: 'Mac' }],
+  webPairingResponseSchema: [{ name: 'Mac', expiresAt: 100 }, { name: '\n', expiresAt: 100 }],
+  webApprovePairingResponseSchema: [{ machineId: id, name: 'Mac' }, { machineId: '', name: 'Mac' }],
+  platformProxySchema: [{ mode: 'custom', url: 'http://127.0.0.1:7890' }, { mode: 'custom', url: 'http://user:pass@proxy.example:80' }],
   localConfigSchema: [{ platformUrl: 'https://steward.example', machineToken: `stm_${'A'.repeat(43)}`,
     slots: 1, projects: [projectRegistration], pi: { command: 'pi', extraArgs: [] }, path: ['/usr/bin'] },
   { platformUrl: 'http://steward.example', machineToken: `stm_${'A'.repeat(43)}`,
     slots: 1, projects: [projectRegistration], pi: { command: 'pi', extraArgs: [] }, path: ['/usr/bin'] }],
 } satisfies Record<SchemaName, [unknown, unknown]>;
+
+it.each(['https://proxy.example:7890', 'http://proxy.example', 'http://proxy.example:65536',
+  'http://proxy.example:7890/path', 'http://proxy.example:7890?flag', 'http://proxy.example:7890#flag'])('拒绝不支持的代理地址 %s', (url) => {
+  expect(c.platformProxySchema.safeParse({ mode: 'custom', url }).success).toBe(false);
+});
+
+it.each(['system', 'direct'] as const)('接受代理模式 %s', (mode) => {
+  expect(c.platformProxySchema.safeParse({ mode }).success).toBe(true);
+});
 
 it.each(Object.entries(samples))('%s 接受合法样例并拒绝非法样例', (name, [valid, invalid]) => {
   const schema = c[name as SchemaName];

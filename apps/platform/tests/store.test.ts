@@ -1,23 +1,45 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { expect, it } from 'vitest';
 import { backupDatabase } from '../src/admin.js';
 import { addMachine, hashPassword, newMachineToken } from '../src/auth.js';
 import { createApp } from '../src/app.js';
 import { claim, heartbeat } from '../src/execution.js';
-import { openStore } from '../src/store.js';
+import { openStore, sha256, Store } from '../src/store.js';
 
 it('迁移空库并开启外键，重复打开保留版本和数据', () => {
   const store = openStore(':memory:');
   try {
-    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 1 });
+    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 2 });
     expect(store.get('PRAGMA foreign_keys')).toMatchObject({ foreign_keys: 1 });
     expect(store.get('PRAGMA busy_timeout')).toMatchObject({ timeout: 5000 });
     expect(() => store.run('INSERT INTO projects VALUES (?,?,?,?)', 'project', 'Project', 'missing', 100)).toThrow(/FOREIGN KEY/);
     expect(store.all<{ name: string }>("SELECT name FROM sqlite_schema WHERE type='index' AND name='one_active_attempt'")).toHaveLength(1);
   } finally { store.connection.close(); }
+});
+
+it('升级原有数据库时建立配对表并保留已有机器及凭据', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-steward-migration-'));
+  const path = join(directory, 'steward.sqlite');
+  const token = newMachineToken();
+  try {
+    const connection = new DatabaseSync(path);
+    try {
+      connection.exec(readFileSync(new URL('../migrations/0001-initial.sql', import.meta.url), 'utf8'));
+      connection.exec('PRAGMA user_version=1');
+      addMachine(new Store(connection), 'Existing Mac', token, 100);
+    } finally { connection.close(); }
+    const upgraded = openStore(path);
+    try {
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 2 });
+      expect(upgraded.all('SELECT * FROM machine_pairings')).toEqual([]);
+      expect(upgraded.get('SELECT name, token_hash FROM machines')).toEqual({ name: 'Existing Mac', token_hash: sha256(token) });
+    } finally { upgraded.connection.close(); }
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 it('将平台异常映射成统一的内部错误响应', async () => {

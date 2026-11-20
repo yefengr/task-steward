@@ -3,6 +3,7 @@ import { Link, useLocation, useRoute } from 'wouter';
 import { projectIdSchema, uuidSchema } from '@pi-steward/contract';
 import { Empty, ErrorNotice, Loading } from './components/common';
 import { Machines } from './components/machines';
+import { GettingStarted, PairComputer } from './components/onboarding';
 import { Project, Projects } from './components/projects';
 import { Shell } from './components/shell';
 import { TaskForm } from './components/task-form';
@@ -65,7 +66,9 @@ function WorkspacePage({ projectId, taskId, location, logout }: {
   }
   const home = location === '/' || location === '/login';
   const machinesPage = location === '/machines';
-  const title = machinesPage ? t.common.machines : project?.name ?? selectedProject ?? (home ? t.common.projects : taskId ? 'Pi Steward' : t.common.notFound);
+  const pairingPage = location === '/pair';
+  const title = pairingPage ? t.pair.title : machinesPage ? t.common.machines
+    : project?.name ?? selectedProject ?? (home ? t.common.projects : taskId ? 'Pi Steward' : t.common.notFound);
   const newProject = project?.id ?? projects[0]?.id;
   function changed() {
     detail.refresh();
@@ -83,8 +86,15 @@ function WorkspacePage({ projectId, taskId, location, logout }: {
     <ErrorNotice error={logoutError} retry={tryLogout} />
     <ErrorNotice error={projectsResource.error} retry={projectsResource.refresh} />
     <ErrorNotice error={machineResource.error} retry={machineResource.refresh} />
-    {home && (projectsResource.data ? <Projects projects={projects} /> : !projectsResource.error && <Loading />)}
-    {machinesPage && (machineResource.data ? <Machines machines={machines} /> : !machineResource.error && <Loading />)}
+    {home && (projectsResource.data ? <>
+      <GettingStarted collapsed={projects.length > 0} />
+      <Projects projects={projects} />
+    </> : !projectsResource.error && <Loading />)}
+    {machinesPage && <>
+      <p className="machine-entry"><Link href="/pair">{t.pair.entry}</Link></p>
+      {machineResource.data ? <Machines machines={machines} /> : !machineResource.error && <Loading />}
+    </>}
+    {pairingPage && <PairComputer />}
     {projectId && <Project id={projectId} machines={machines} />}
     {taskId && <>
       <ErrorNotice error={detail.error} retry={detail.refresh} />
@@ -93,7 +103,7 @@ function WorkspacePage({ projectId, taskId, location, logout }: {
         <TaskDetail detail={detail.data} project={project} machines={machines} onChanged={changed} />
       </Suspense>}
     </>}
-    {!home && !machinesPage && !projectId && !taskId && <Empty><Link href="/">{t.common.goHome}</Link></Empty>}
+    {!home && !machinesPage && !pairingPage && !projectId && !taskId && <Empty><Link href="/">{t.common.goHome}</Link></Empty>}
     {creating && <TaskForm initialProject={creating} projects={projects} machines={machines} onClose={() => setCreating(undefined)}
       onSaved={(task) => { setCreating(undefined); navigate(taskPath(task.id)); }} />}
   </Shell>;

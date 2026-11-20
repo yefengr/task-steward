@@ -1,5 +1,6 @@
+import { createHash, randomBytes } from 'node:crypto';
 import type { Page } from '@playwright/test';
-import { webTaskDetailResponseSchema, webTaskMutationResponseSchema } from '@pi-steward/contract';
+import { createPairingResponseSchema, STEW_INSTALL_COMMAND, webTaskDetailResponseSchema, webTaskMutationResponseSchema } from '@pi-steward/contract';
 import { artifact, expect, projectId, projectName, test } from './platform-fixture';
 
 const title = '验证任务控制台交付流程';
@@ -57,6 +58,83 @@ async function reload(page: Page) {
   await page.reload();
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
 }
+
+async function startPairing(page: Page, origin: string, name: string) {
+  const token = `stm_${randomBytes(32).toString('base64url')}`;
+  const response = await page.request.post(`${origin}/api/v1/pairing/create`, {
+    headers: { Origin: origin }, data: { name, tokenHash: createHash('sha256').update(token).digest('hex') },
+  });
+  expect(response.status()).toBe(200);
+  return createPairingResponseSchema.parse(await response.json());
+}
+
+test('接入网页展示首次步骤并从电脑页完成短码审批', async ({ page, platform }) => {
+  const { origin, password } = platform;
+  const machineName = '网页接入 Mac';
+  const pairing = await startPairing(page, origin, machineName);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  await page.goto(origin);
+  await signIn(page, password);
+
+  const guide = page.locator('details.onboarding');
+  await expect(guide).not.toHaveAttribute('open', '');
+  await guide.locator('summary').click();
+  for (const command of [STEW_INSTALL_COMMAND, 'stew pair', 'stew start', 'stew add']) {
+    await expect(guide.getByText(command, { exact: true })).toBeVisible();
+  }
+  const copyInstall = guide.getByRole('button', { name: `复制 ${STEW_INSTALL_COMMAND}` });
+  await copyInstall.click();
+  await expect(copyInstall).toContainText('已复制');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(STEW_INSTALL_COMMAND);
+
+  await guide.getByRole('link', { name: '查看电脑' }).click();
+  await expect(page).toHaveURL(`${origin}/machines`);
+  await page.getByRole('link', { name: '接入新电脑' }).click();
+  await expect(page).toHaveURL(`${origin}/pair`);
+
+  await page.getByLabel('接入短码').fill('0000000000');
+  await page.getByRole('button', { name: '检查短码' }).click();
+  await expect(page.getByRole('alert')).toContainText('短码无效、已过期或已使用');
+  await page.getByLabel('接入短码').fill(pairing.code);
+  await page.getByRole('button', { name: '检查短码' }).click();
+  const request = page.getByRole('region', { name: '接入请求' });
+  await expect(request).toContainText(machineName);
+  await expect(request).toContainText(pairing.code);
+  await expect(request.getByRole('heading')).toBeFocused();
+  await request.getByRole('button', { name: '确认接入', exact: true }).click();
+
+  const success = page.getByRole('region', { name: '电脑已接入' });
+  await expect(success).toContainText(machineName);
+  await expect(success).toContainText('stew start');
+  await expect(success.getByRole('heading')).toBeFocused();
+  await success.getByRole('link', { name: '查看电脑' }).click();
+  await expect(page.getByRole('heading', { name: machineName, exact: true })).toBeVisible();
+});
+
+test('手机从配对深链登录，已使用的短码不再允许确认', async ({ page, platform }) => {
+  const { origin, password } = platform;
+  const { code } = await startPairing(page, origin, '手机审批 Mac');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${origin}/pair`);
+  await signIn(page, password);
+  await expect(page).toHaveURL(`${origin}/pair`);
+  const field = page.getByLabel('接入短码');
+  await expect(field).toBeFocused();
+  await field.fill(code);
+  await field.press('Enter');
+  const pending = page.getByRole('region', { name: '接入请求' });
+  await expect(pending).toContainText('手机审批 Mac');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const consumed = await page.request.post(`${origin}/api/v1/web/pairing/approve`, { headers: { Origin: origin }, data: { code } });
+  expect(consumed.status()).toBe(200);
+  await pending.getByRole('button', { name: '确认接入', exact: true }).click();
+  await expect(pending).toBeHidden();
+  const alert = page.getByRole('alert');
+  await expect(alert).toContainText('短码无效、已过期或已使用');
+  await expect(field).toBeFocused();
+  await alert.getByRole('link', { name: '查看电脑' }).click();
+  await expect(page.getByRole('heading', { name: '手机审批 Mac', exact: true })).toBeVisible();
+});
 
 test('生产静态资源和页面入口保持各自的响应', async ({ request, platform }) => {
   const { origin } = platform;

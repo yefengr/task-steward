@@ -56,7 +56,7 @@ export function saveState(path: string, state: State) {
   }
 }
 
-export function acquireRunLock(statePath: string) {
+export function acquireRunLock(statePath: string, message = '无法取得启动器锁，请确认只有一个 run 实例。') {
   mkdirSync(dirname(statePath), { recursive: true, mode: 0o700 });
   const lockPath = `${statePath}.lock`;
   closeSync(openSync(lockPath, 'a', 0o600));
@@ -66,7 +66,7 @@ export function acquireRunLock(statePath: string) {
     db.exec('BEGIN IMMEDIATE');
   } catch {
     db.close();
-    throw new Error('无法取得启动器锁，请确认只有一个 run 实例。');
+    throw new Error(message);
   }
   return () => db.close();
 }

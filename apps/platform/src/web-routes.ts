@@ -6,6 +6,7 @@ import { jsonInput, routeParam } from './app.js';
 import type { AppOptions } from './app.js';
 import { createWebSession, deleteWebSession, LoginLimiter, loginSource, originConfig, passwordVerifier, SESSION_COOKIE, webSessionValid } from './auth.js';
 import { reject } from './errors.js';
+import { mountWebPairing } from './pairing-routes.js';
 import { createTask, taskAction, updateTask } from './tasks.js';
 import { machineViews, projectViews, requireProject, taskDetail, taskView } from './views.js';
 import type { TaskRow } from './views.js';
@@ -44,6 +45,7 @@ export function mountWeb(options: AppOptions, now: () => number) {
     if (!webSessionValid(store, getCookie(context, SESSION_COOKIE), now())) reject('unauthorized', 'Web session required');
     await next();
   });
+  web.route('/pairing', mountWebPairing(store, now));
   web.post('/auth/logout', async (context) => {
     await jsonInput(context, c.webLogoutRequestSchema);
     deleteWebSession(store, getCookie(context, SESSION_COOKIE));

@@ -9,6 +9,7 @@ export function mountStaticWeb(app: Hono, root: string) {
   app.get('/', entry);
   app.get('/login', entry);
   app.get('/machines', entry);
+  app.get('/pair', entry);
   app.get('/projects/:projectId', (context, next) => {
     if (!projectIdSchema.safeParse(context.req.param('projectId')).success) return next();
     return entry(context, next);

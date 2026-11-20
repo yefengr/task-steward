@@ -8,6 +8,7 @@ import { ApiError, reject } from './errors.js';
 import type { Store } from './store.js';
 import { mountWeb } from './web-routes.js';
 import { mountMachineRoutes } from './machine-routes.js';
+import { mountPublicPairing } from './pairing-routes.js';
 import { mountStaticWeb } from './static-web.js';
 
 export interface AppOptions {
@@ -48,6 +49,7 @@ export function createApp(options: AppOptions) {
     context.header('Cache-Control', 'no-store');
     await next();
   });
+  app.route('/api/v1/pairing', mountPublicPairing(options, now));
   app.use('/api/v1/*', bodyLimit({ maxSize: 2 * 1024 * 1024,
     onError: (context) => context.json(errorBody('invalid_request', 'Request body too large'), 400) }));
   app.route('/api/v1/web', mountWeb(options, now));

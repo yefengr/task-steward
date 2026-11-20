@@ -1,13 +1,18 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { uuidSchema } from '@pi-steward/contract';
 import { afterEach, expect, it, vi } from 'vitest';
 import { registerSteward } from '../src/index.js';
+
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: vi.fn(actual.homedir) };
+});
 
 const toolNames = ['steward_task', 'steward_progress', 'steward_ask', 'steward_question_update',
   'steward_decision', 'steward_deliver', 'steward_finish'];
@@ -35,13 +40,26 @@ function mockTools(fetcher: typeof fetch, options: { attemptId?: string; config?
     return tool.execute('test-call', args, undefined, undefined, { shutdown } as unknown as Parameters<typeof tool.execute>[4]);
   } };
 }
-function configFile() {
-  const file = join(workspace(), 'config.json');
+function configFile(file = join(workspace(), 'config.json'), platformUrl = 'https://steward.example') {
+  mkdirSync(dirname(file), { recursive: true });
   const token = `stm_${randomBytes(32).toString('base64url')}`;
-  writeFileSync(file, JSON.stringify({ platformUrl: 'https://steward.example', machineToken: token,
+  writeFileSync(file, JSON.stringify({ platformUrl, machineToken: token,
     slots: 1, projects: [], path: ['/usr/bin'], pi: { command: 'pi', extraArgs: [] } }), { mode: 0o600 });
   return file;
 }
+
+it('扩展优先读取新默认配置，升级前的配置仍能使用', async () => {
+  const directory = workspace();
+  configFile(join(directory, '.config', 'pi-steward', 'config.json'), 'https://legacy.example');
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ ok: true }));
+  const agent = mockTools(fetcher, { attemptId: randomUUID() });
+  vi.mocked(homedir).mockReturnValueOnce(directory);
+  await agent.call('steward_progress', { text: '旧配置' });
+  configFile(join(directory, 'pi-steward', 'config.json'), 'https://current.example');
+  vi.mocked(homedir).mockReturnValueOnce(directory);
+  await agent.call('steward_progress', { text: '新配置' });
+  expect(fetcher.mock.calls.map(([url]) => new URL(String(url)).origin)).toEqual(['https://legacy.example', 'https://current.example']);
+});
 
 it('手动会话或无效执行编号不注册工具', () => {
   expect(mockTools(vi.fn()).registerTool).not.toHaveBeenCalled();

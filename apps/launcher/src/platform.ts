@@ -1,16 +1,17 @@
 import * as c from '@pi-steward/contract';
+import { platformFetch, PlatformTransportError } from '@pi-steward/platform-http';
 import type { z } from 'zod';
 import type { Event } from './state.js';
 
 const REQUEST_TIMEOUT_MS = 4_000;
 
 export class PlatformError extends Error {
-  constructor(readonly code: c.ErrorCode | 'network_error' | 'invalid_response', readonly startedAlreadySaved = false) {
+  constructor(readonly code: c.ErrorCode | PlatformTransportError['code'] | 'network_error', readonly startedAlreadySaved = false) {
     super(`平台请求失败（${code}）。`);
   }
 }
 
-export function platformClient(config: c.LocalConfig, fetcher = fetch, getMachineToken = () => config.machineToken) {
+export function platformClient(config: c.LocalConfig, fetcher?: typeof fetch, getMachineToken = () => config.machineToken) {
   const origin = new URL(config.platformUrl).origin;
   async function post<T>(path: string, body: object, schema: z.ZodType<T>, startedReport = false): Promise<T> {
     let machineToken: string;
@@ -18,14 +19,16 @@ export function platformClient(config: c.LocalConfig, fetcher = fetch, getMachin
     let res: Response;
     let data: unknown;
     try {
-      res = await fetcher(`${origin}/api/v1/launcher/${path}`, {
+      const url = `${origin}/api/v1/launcher/${path}`;
+      const init: RequestInit = {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: { Authorization: `Bearer ${machineToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      });
+      };
+      res = await (fetcher ? fetcher(url, init) : platformFetch(url, init, config.proxy));
       data = await res.json();
-    } catch {
-      throw new PlatformError('network_error');
+    } catch (error) {
+      throw new PlatformError(error instanceof PlatformTransportError ? error.code : 'network_error');
     }
     if (!res.ok) {
       const parsed = c.errorResponseSchema.safeParse(data);

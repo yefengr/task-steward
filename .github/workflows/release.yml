@@ -1,0 +1,79 @@
+name: Stage Steward on npm
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: steward-npm
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - name: Verify and pack
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm verify
+          pnpm pack:stew
+          mkdir "$RUNNER_TEMP/steward-npm"
+          cp .pi/tmp/yefengr-steward-*.tgz "$RUNNER_TEMP/steward-npm/"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: steward-npm-package
+          path: ${{ runner.temp }}/steward-npm
+          if-no-files-found: error
+          retention-days: 3
+
+  stage:
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          # 使用自带 npm stage publish 的 Node 24 版本。
+          node-version: 24.22.3
+      - uses: actions/download-artifact@v8
+        with:
+          name: steward-npm-package
+          path: ${{ runner.temp }}/steward-npm
+      - name: Submit package for review
+        shell: bash
+        run: |
+          shopt -s nullglob
+          bundles=("$RUNNER_TEMP"/steward-npm/yefengr-steward-*.tgz)
+          [[ ${#bundles[@]} == 1 ]]
+          bundle=${bundles[0]}
+          manifest=$(tar -xOzf "$bundle" package/package.json)
+          version=$(jq -er 'select(.name == "@yefengr/steward") | .version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' <<< "$manifest")
+          [[ "$(basename "$bundle")" == "yefengr-steward-$version.tgz" ]]
+          registry=https://registry.npmjs.org
+          status=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$registry/@yefengr%2fsteward/$version")
+          case "$status" in
+            200) echo "@yefengr/steward@$version is already published." >> "$GITHUB_STEP_SUMMARY"; exit 0 ;;
+            404) ;;
+            *) echo "Could not check the npm version (HTTP $status)." >&2; exit 1 ;;
+          esac
+          npm stage publish "$bundle" --access public --registry="$registry"
+          echo "@yefengr/steward@$version is staged. Review and approve it on npmjs.com." >> "$GITHUB_STEP_SUMMARY"

@@ -7,6 +7,17 @@ const escapedTmuxArg = (value: string) => value.endsWith(';') ? `${value.slice(0
 const instructions = '先调用 steward_task 读取完整任务背景。按项目规则和任务授权工作，在关键节点调用 steward_progress。需要用户决定时调用 steward_ask 并等待回应。用 steward_deliver 保存交付，处理完收尾后调用 steward_finish。';
 export const targetFor = (id: string) => `steward-${id}`;
 
+export type TmuxHealth = 'ready' | 'missing' | 'unavailable';
+export const tmuxHealthText: Record<TmuxHealth, string> = {
+  ready: 'tmux 可用',
+  missing: '找不到 tmux，请检查安装和配置中的 PATH',
+  unavailable: 'tmux 无法运行或无法查询 Steward 的会话',
+};
+
+function commandFailure(error: unknown): 'missing' | 'unavailable' {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unavailable';
+}
+
 export class TmuxError extends Error {
   constructor() { super('无法完成 tmux 操作，将在下次循环重新核对。'); }
 }
@@ -27,19 +38,30 @@ export function tmuxClient(config: LocalConfig, options: {
   const run = options.run ?? runFile;
   const socket = options.socket ? ['-S', options.socket] : ['-L', 'steward'];
   const exec = (args: string[]) => run('tmux', [...socket, '-u', '-f', '/dev/null', ...args], { env, timeout: 3_000 });
+  async function listSessions(): Promise<string[] | 'missing' | 'unavailable'> {
+    try {
+      const { stdout } = await exec(['list-sessions', '-F', '#{session_name}']);
+      return stdout.split('\n');
+    } catch (error) {
+      const { code, stderr } = error as { code?: number; stderr?: string };
+      // tmux 在没有会话时不会保留服务进程，此时仍可启动下一条任务。
+      if (code === 1 && typeof stderr === 'string' &&
+        /^(?:no server running on [^\n]+|error connecting to [^\n]+ \(No such file or directory\))\n?$/u.test(stderr)) return [];
+      return commandFailure(error);
+    }
+  }
   return {
-    async inspect(target: string): Promise<'present' | 'absent' | 'unavailable'> {
-      try {
-        const { stdout } = await exec(['list-sessions', '-F', '#{session_name}']);
-        return stdout.split('\n').includes(target) ? 'present' : 'absent';
-      } catch (error) {
-        const { code, stderr } = error as { code?: number; stderr?: string };
-        if (code === 1 && typeof stderr === 'string' &&
-          /^(?:no server running on [^\n]+|error connecting to [^\n]+ \(No such file or directory\))\n?$/u.test(stderr)) {
-          return 'absent';
-        }
-        return 'unavailable';
+    async check({ verifyVersion = false } = {}): Promise<TmuxHealth> {
+      if (verifyVersion) {
+        try { await exec(['-V']); } catch (error) { return commandFailure(error); }
       }
+      const sessions = await listSessions();
+      return Array.isArray(sessions) ? 'ready' : sessions;
+    },
+    async inspect(target: string): Promise<'present' | 'absent' | 'unavailable'> {
+      const sessions = await listSessions();
+      if (!Array.isArray(sessions)) return 'unavailable';
+      return sessions.includes(target) ? 'present' : 'absent';
     },
     async launch(target: string, claim: ClaimedAttempt, projectPath: string) {
       const message = `${claim.kind === 'rework' ? '返修本任务。' : '开始执行本任务。'}${instructions}`;

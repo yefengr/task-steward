@@ -13,14 +13,24 @@ function binaryDir(name: string, path: string[]) {
   });
 }
 
+export function launcherPath(env = process.env) {
+  const current = (env.PATH ?? '').split(delimiter).filter((path) => isAbsolute(path) && !path.includes(':'));
+  const executableDirs = ['pi', 'tmux', 'git'].map((name) => binaryDir(name, current)).filter((dir) => dir !== undefined);
+  return [...new Set([...executableDirs, dirname(process.execPath), ...DEFAULT_PATH])];
+}
+
+export function checkPiPrerequisite(path: string[], pi: string) {
+  if (!binaryDir(isAbsolute(pi) ? pi.split('/').at(-1)! : pi, isAbsolute(pi) ? [dirname(pi)] : path)) {
+    throw new Error('找不到 Pi，请检查安装和配置中的 PATH。');
+  }
+}
+
 export function initConfig(path: string, env = process.env) {
-  const current = (env.PATH ?? '').split(delimiter).filter(isAbsolute);
-  const executableDirs = ['pi', 'node', 'tmux'].map((name) => binaryDir(name, current)).filter((dir) => dir !== undefined);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeFileSync(path, `${JSON.stringify({
     platformUrl: 'https://steward.example.com', machineToken: '请填入机器令牌', slots: 1,
     projects: [], pi: { command: 'pi', extraArgs: [] },
-    path: [...new Set([...executableDirs, dirname(process.execPath), ...DEFAULT_PATH])],
+    path: launcherPath(env),
   }, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
 }
 
@@ -35,6 +45,10 @@ export function launchService(options: {
   const domain = `gui/${options.uid}`;
   const run = options.launchctl ?? ((args) => exec('/bin/launchctl', args, { timeout: 10_000 }));
   return {
+    async isLoaded() {
+      try { await run(['print', `${domain}/${LABEL}`]); return true; }
+      catch { return false; }
+    },
     async install() {
       mkdirSync(dirname(plist), { recursive: true, mode: 0o700 });
       mkdirSync(logs, { recursive: true, mode: 0o700 });

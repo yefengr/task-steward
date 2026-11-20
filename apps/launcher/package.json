@@ -1,6 +1,6 @@
 {
   "name": "@pi-steward/launcher",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,6 @@
     "test": "vitest run",
     "start": "node dist/index.js"
   },
-  "dependencies": { "@pi-steward/contract": "workspace:*", "zod": "catalog:" },
+  "dependencies": { "@pi-steward/contract": "workspace:*", "@pi-steward/platform-http": "workspace:*", "zod": "catalog:" },
   "devDependencies": { "@types/node": "catalog:", "typescript": "catalog:", "vitest": "catalog:" }
 }

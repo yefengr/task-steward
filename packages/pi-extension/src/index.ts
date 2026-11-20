@@ -22,7 +22,10 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
     return result(JSON.stringify(data), data);
   } catch (error) {
     const code = error instanceof AgentError ? error.code : 'request_failed';
-    const guidance = code === 'invalid_request' ? '请检查工具参数后重试。' :
+    const guidance = code === 'cancelled' ? '请求已取消。' :
+      code === 'helper_unavailable' ? '请重新安装 Steward。' :
+      code === 'proxy_unsupported' ? '显式代理需要使用 Node 24.20.0 或更高版本运行 Pi。' :
+      code === 'invalid_request' ? '请检查工具参数后重试。' :
       code === 'attempt_ended' ? '本次尝试已结束，请检查平台状态。' :
       code === 'conflict' ? '请核对平台状态。交付请求重试时请保留原参数。' :
       code === 'pending_writes_full' ? '待确认的请求已达上限，请先使用原参数重试已有请求。' :
@@ -37,7 +40,7 @@ function deliveryId(attemptId: string) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-export function registerSteward(pi: ExtensionAPI, options = { env: process.env, fetcher: fetch }) {
+export function registerSteward(pi: ExtensionAPI, options: { env: NodeJS.ProcessEnv; fetcher?: typeof fetch } = { env: process.env }) {
   const attempt = c.uuidSchema.safeParse(options.env.STEWARD_ATTEMPT_ID);
   if (!attempt.success) return;
   const request = agentClient(attempt.data, options);

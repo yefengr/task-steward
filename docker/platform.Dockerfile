@@ -8,6 +8,7 @@ COPY apps/web/package.json ./apps/web/package.json
 COPY apps/launcher/package.json ./apps/launcher/package.json
 COPY packages/pi-extension/package.json ./packages/pi-extension/package.json
 COPY packages/contract/package.json ./packages/contract/package.json
+COPY packages/platform-http/package.json ./packages/platform-http/package.json
 RUN pnpm --filter @pi-steward/platform... --filter @pi-steward/web... install --frozen-lockfile
 COPY packages/contract ./packages/contract
 COPY apps/platform ./apps/platform

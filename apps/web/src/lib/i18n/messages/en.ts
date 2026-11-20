@@ -52,6 +52,28 @@ export const en = {
   actions: { schedule: 'Schedule', unschedule: 'Withdraw', reschedule: 'Reschedule', cancel: 'Cancel task', accept: 'Accept delivery', rework: 'Request rework',
     cancelHint: 'A cancelled task cannot be scheduled again. If it is still running, the launcher will stop the current attempt.',
     acceptHint: 'Accepting this delivery marks the task complete.', reworkHint: 'Describe what needs to change. The task will return to the queue.' },
+  onboarding: {
+    title: 'Connect a computer',
+    intro: 'Run these commands in a terminal on the computer that will execute tasks.',
+    install: 'Install the CLI', pair: 'Request a pairing code', start: 'Start the launcher', add: 'Register a project',
+    installHint: 'Install the Steward CLI with Node.js.', pairHint: 'The terminal shows a short code. Confirm it on this site.',
+    startHint: 'Start the launcher after approving the pairing. Keep it running.', addHint: 'Run this inside the project directory you want to register.',
+    copy: 'Copy', copied: 'Copied', copyFailed: 'Copy failed. Select the command and copy it manually.',
+    confirm: 'Confirm pairing', viewMachines: 'View computers', more: 'Connect another computer or project',
+  },
+  pair: {
+    title: 'Pair a computer', hint: 'Run stew pair on the computer, then enter the short code shown in the terminal.',
+    code: 'Pairing code', placeholder: 'A1B2C3D4E5', inspect: 'Check code', checking: 'Checking…', recheck: 'Check again', changeCode: 'Use another code',
+    request: 'Pairing request', name: 'Computer', expires: 'Code expires',
+    warning: 'Only approve a request you started on this computer. Approval lets it receive tasks.',
+    approve: 'Approve pairing', approving: 'Approving…',
+    success: 'Computer connected', successHint: 'has been paired.', start: 'Start the launcher',
+    startHint: 'After starting the launcher, check the computer list to see when the computer comes online.', machines: 'View computers', again: 'Pair another computer',
+    entry: 'Pair a computer',
+    codeUnavailable: 'This code is invalid, expired, or already used. Check the computer list or run stew pair again.',
+    nameConflict: 'Steward already has a computer with this name. Check the computer list for the existing entry.',
+    approvalUnknown: 'The approval could not be confirmed. Check the computer list before trying again.',
+  },
 };
 
 export type Messages = typeof en;

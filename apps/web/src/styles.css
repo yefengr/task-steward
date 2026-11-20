@@ -128,7 +128,33 @@ summary.group-head { min-height: var(--pwa-hit-target); padding-bottom: 0; }
 .machine-slots progress { max-width: 100%; accent-color: var(--pwa-running); }
 .machine-projects { display: flex; gap: 8px; flex-wrap: wrap; }
 .machine-projects a { overflow-wrap: anywhere; }
+.machine-entry { margin-bottom: 12px; font-size: var(--pwa-text-list); font-weight: 600; }
 .machine-card .row { background: var(--pwa-bg); }
+
+.onboarding { margin-bottom: 20px; padding: 16px; background: var(--pwa-card); border-radius: var(--pwa-radius-lg); }
+.onboarding.fold { padding: 0; }
+.onboarding-body { padding-top: 12px; }
+.onboarding h2 { overflow-wrap: anywhere; }
+.onboarding-intro { margin-top: 4px; }
+.onboarding-steps { display: grid; gap: 8px; margin-top: 12px; }
+.onboarding-step { padding: 10px 12px; background: var(--pwa-bg); border-radius: var(--pwa-radius-md); }
+.onboarding-step h3 { font-size: var(--pwa-text-list); }
+.onboarding-step p { margin: 2px 0 8px; }
+.onboarding-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.command-line { display: flex; align-items: center; gap: 8px; }
+.command-line code { flex: 1; min-width: 0; padding: 8px 10px; background: var(--pwa-panel); border: 1px solid var(--pwa-line);
+  border-radius: var(--pwa-radius-md); font-size: var(--pwa-text-meta); }
+.command-line button { flex: none; }
+.pair-page { display: grid; gap: 12px; }
+.pair-hint { max-width: 560px; }
+.pair-card { width: min(560px, 100%); padding: 20px; background: var(--pwa-card); border-radius: var(--pwa-radius-lg); }
+.pair-form { display: grid; gap: 16px; }
+.pair-input { font-family: var(--pwa-font-mono); letter-spacing: 0.1em; }
+.pair-code { font-family: var(--pwa-font-mono); letter-spacing: 0.12em; }
+.pair-card .kv { margin-bottom: 12px; }
+.pair-card .callout { margin-bottom: 12px; }
+.pair-step { margin: 16px 0 8px; font-weight: 600; }
+.pair-card .muted { margin-top: 8px; }
 .online-dot, .offline-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .online-dot { background: var(--pwa-accent); }
 .offline-dot { border: 1.5px solid var(--pwa-control-line); }

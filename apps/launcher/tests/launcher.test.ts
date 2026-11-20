@@ -40,17 +40,18 @@ function fixture(warn?: (message: string) => void) {
   });
   const heartbeat = vi.fn<Platform['heartbeat']>(async ({ attempts }) => ({ directives: active ? [{ attemptId: id, tmuxSession: target,
     action: cancelled ? 'cancel' : attempts.some((item) => item.id === id) ? 'continue' : 'unknown' }] : [] }));
+  const check = vi.fn<Tmux['check']>(async () => 'ready');
   const inspect = vi.fn<Tmux['inspect']>(async () => session);
   const launch = vi.fn<Tmux['launch']>(async () => {
     expect(loadState(path).executions).toMatchObject([{ target, phase: 'launching' }]);
     session = 'present';
   });
   const cancel = vi.fn<Tmux['cancel']>(async () => { session = 'absent'; });
-  return { path, id, target, attempt, claim, report, heartbeat, inspect, launch, cancel, setActive: () => { active = true; },
+  return { path, id, target, attempt, claim, report, heartbeat, check, inspect, launch, cancel, setActive: () => { active = true; },
     setCancelled: () => { cancelled = true; }, setSession: (value: typeof session) => { session = value; },
     advance: (ms: number) => { now += ms; },
     restart: () => new Launcher({ config, version: 'test', state: loadState(path), save: (state) => saveState(path, state),
-      platform: { claim, report, heartbeat }, tmux: { inspect, launch, cancel }, now: () => now, warn }),
+      platform: { claim, report, heartbeat }, tmux: { check, inspect, launch, cancel }, now: () => now, warn }),
   };
 }
 
@@ -60,6 +61,43 @@ it('领取前落盘，启动前记下目标与时刻，报告成功后清理 out
   expect(x.launch).toHaveBeenCalledExactlyOnceWith(x.target, x.attempt, '/tmp/中文 project');
   expect(x.report.mock.calls[0]?.[0]).toMatchObject({ kind: 'started', id: x.id, body: { tmuxSession: x.target } });
   expect(loadState(x.path)).toMatchObject({ outbox: [], executions: [{ phase: 'observed' }] });
+});
+
+it('tmux 不可用时继续发心跳并保留队列，恢复后自动领取', async () => {
+  const warn = vi.fn();
+  const x = fixture(warn);
+  const launcher = x.restart();
+  x.check.mockResolvedValue('missing');
+  await launcher.tick();
+  await launcher.tick();
+  expect(x.heartbeat).toHaveBeenCalledTimes(2);
+  expect(x.claim).not.toHaveBeenCalled();
+  expect(loadState(x.path).claimRequestId).toBeUndefined();
+  expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('找不到 tmux'));
+  x.check.mockResolvedValue('ready');
+  await launcher.tick();
+  expect(x.claim).toHaveBeenCalledTimes(1);
+  expect(x.launch).toHaveBeenCalledTimes(1);
+});
+
+it('tmux 不可用时保留未确认领取，恢复后用原请求 ID 核对并启动', async () => {
+  const x = fixture();
+  const launcher = x.restart();
+  x.claim.mockImplementationOnce(async () => { x.setActive(); throw new PlatformError('network_error'); });
+  await launcher.tick();
+  const requestId = loadState(x.path).claimRequestId;
+  expect(requestId).toBeDefined();
+  x.check.mockResolvedValue('unavailable');
+  await launcher.tick();
+  expect(x.heartbeat).toHaveBeenCalledTimes(2);
+  expect(loadState(x.path).claimRequestId).toBe(requestId);
+  expect(x.claim).toHaveBeenCalledTimes(1);
+  expect(x.report).not.toHaveBeenCalled();
+  expect(x.launch).not.toHaveBeenCalled();
+  x.check.mockResolvedValue('ready');
+  await launcher.tick();
+  expect(x.claim.mock.calls).toEqual([[requestId], [requestId]]);
+  expect(x.launch).toHaveBeenCalledTimes(1);
 });
 
 it('领取响应连续丢失时保留 UUID，重启重放前不将缺失目标当作退出', async () => {

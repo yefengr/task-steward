@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsc -p tsconfig.build.json && vitest run"
   },
-  "dependencies": { "@pi-steward/contract": "workspace:*" },
+  "dependencies": { "@pi-steward/contract": "workspace:*", "@pi-steward/platform-http": "workspace:*" },
   "peerDependencies": { "@earendil-works/pi-coding-agent": "1.5.2", "typebox": "1.3.27" },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.5.2",

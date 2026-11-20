@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LocalConfig } from '@pi-steward/contract';
 import { afterEach, expect, it, vi } from 'vitest';
-import { readConfig } from '../src/config.js';
+import { configPath, readConfig, writeConfig } from '../src/config.js';
 import { platformClient } from '../src/platform.js';
 import { initConfig, launchService } from '../src/service.js';
 import { acquireRunLock } from '../src/state.js';
@@ -48,6 +48,39 @@ it('区分无 server、名称仅前缀匹配和 tmux 查询失败', async () => 
   expect(await tmux.inspect(target)).toBe('absent');
   expect(await tmux.inspect(target)).toBe('unavailable');
   expect(await tmux.inspect(target)).toBe('present');
+});
+
+it('tmux 检查区分空闲、缺失、无法执行和 socket 故障', async () => {
+  type Runner = NonNullable<Parameters<typeof tmuxClient>[1]['run']>;
+  const run = vi.fn().mockResolvedValueOnce({ stdout: 'tmux 3.7c\n', stderr: '' })
+    .mockRejectedValueOnce({ code: 1, stderr: 'no server running on /tmp/isolated\n' })
+    .mockRejectedValueOnce({ code: 'ENOENT' })
+    .mockRejectedValueOnce({ code: 'EACCES' })
+    .mockRejectedValueOnce({ code: 1, stderr: 'error connecting to /tmp/isolated (Permission denied)\n' });
+  const tmux = tmuxClient(config, { configPath: '/mock/config', extensionPath: '/mock/extension', run: run as Runner, env: {} });
+  expect(await tmux.check({ verifyVersion: true })).toBe('ready');
+  expect(run.mock.calls[0]?.[1]).toEqual(['-L', 'steward', '-u', '-f', '/dev/null', '-V']);
+  expect(await tmux.check({ verifyVersion: true })).toBe('missing');
+  expect(await tmux.check({ verifyVersion: true })).toBe('unavailable');
+  expect(await tmux.check()).toBe('unavailable');
+  expect(run).toHaveBeenCalledTimes(5);
+});
+
+it('新安装使用家目录下的 pi-steward，已有配对继续读取原配置', () => {
+  const directory = home();
+  const current = join(directory, 'pi-steward', 'config.json');
+  const legacy = join(directory, '.config', 'pi-steward', 'config.json');
+  expect(configPath({}, directory)).toBe(current);
+  writeConfig(`${legacy}.pairing`, config);
+  expect(configPath({}, directory)).toBe(legacy);
+  writeConfig(`${current}.pairing`, config);
+  expect(configPath({}, directory)).toBe(current);
+  writeConfig(legacy, config);
+  expect(configPath({}, directory)).toBe(legacy);
+  expect(readConfig(configPath({}, directory))).toEqual(config);
+  writeConfig(current, { ...config, slots: 2 });
+  expect(readConfig(configPath({}, directory)).slots).toBe(2);
+  expect(configPath({ STEWARD_CONFIG: legacy }, directory)).toBe(legacy);
 });
 
 it('配置为独占 0600，拒绝不安全权限和未显式允许的 HTTP', () => {

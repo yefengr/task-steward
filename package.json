@@ -5,10 +5,12 @@
   "engines": { "node": ">=24.20.0 <25" },
   "scripts": {
     "build:contract": "pnpm --filter @pi-steward/contract build",
-    "typecheck": "pnpm build:contract && pnpm -r --if-present run typecheck",
+    "build:client": "pnpm --filter @pi-steward/platform-http... run build",
+    "typecheck": "pnpm build:client && pnpm -r --if-present run typecheck",
     "lint": "eslint . --max-warnings=0",
-    "test": "pnpm build:contract && pnpm -r --if-present run test",
+    "test": "pnpm build:client && pnpm -r --if-present run test",
     "build": "pnpm -r --if-present run build",
+    "pack:stew": "pnpm --filter @pi-steward/launcher... --filter @pi-steward/pi-extension... run build && node scripts/pack-stew.mjs",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   },
   "devDependencies": {

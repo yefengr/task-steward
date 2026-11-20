@@ -4,8 +4,8 @@ import type { LauncherHeartbeatResponse, LocalConfig } from '@pi-steward/contrac
 import type { Platform } from './platform.js';
 import { PlatformError } from './platform.js';
 import type { Execution, State } from './state.js';
-import type { Tmux } from './tmux.js';
-import { targetFor, TmuxError } from './tmux.js';
+import type { Tmux, TmuxHealth } from './tmux.js';
+import { targetFor, TmuxError, tmuxHealthText } from './tmux.js';
 
 type Directive = LauncherHeartbeatResponse['directives'][number];
 const TERMINAL_REPORT_ERRORS = new Set(['attempt_ended', 'forbidden', 'not_found', 'invalid_request', 'conflict']);
@@ -14,6 +14,7 @@ const MAX_OUTBOX_BACKOFF_MS = 120_000;
 export class Launcher {
   private nextOutboxRetryAt = 0;
   private outboxBackoff = HEARTBEAT_INTERVAL_MS;
+  private lastTmuxHealth: TmuxHealth = 'ready';
   constructor(private readonly options: {
     config: LocalConfig;
     version: string;
@@ -192,10 +193,19 @@ export class Launcher {
     return !!claim;
   }
 
+  private async canClaim() {
+    const health = await this.options.tmux.check();
+    if (health !== 'ready' && health !== this.lastTmuxHealth) {
+      this.options.warn?.(`${tmuxHealthText[health]}。已暂停领取新任务，恢复后会自动继续。`);
+    }
+    this.lastTmuxHealth = health;
+    return health === 'ready';
+  }
+
   async tick() {
     const flushed = await this.flush();
     const replayed = !!this.state.claimRequestId;
-    if (replayed) await this.claim();
+    if (replayed && await this.canClaim()) await this.claim();
     const heartbeat = await this.heartbeat();
     if (!heartbeat) return;
     await this.reconcile(heartbeat, !!this.state.claimRequestId);
@@ -205,7 +215,7 @@ export class Launcher {
       ...heartbeat.directives.map(({ attemptId }) => attemptId),
       ...this.state.executions.filter(({ phase }) => phase !== 'exited').map(({ id }) => id),
     ]).size;
-    if (activeCount >= slots) return;
+    if (activeCount >= slots || !await this.canClaim()) return;
     if (!await this.claim()) return;
     // 领取重放可能返回已经结束的尝试，须由新的心跳确认仍可启动。
     const afterClaim = await this.heartbeat();

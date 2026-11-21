@@ -84,5 +84,20 @@ jobs:
             echo "Version $version must be newer than npm latest ($latest)." >&2
             exit 1
           fi
-          npm publish "$bundle" --access public --registry="$registry"
-          echo "@yefengr/steward@$version published to npm." >> "$GITHUB_STEP_SUMMARY"
+          publish_log=$(mktemp)
+          trap 'rm -f "$publish_log"' EXIT
+          if npm publish "$bundle" --access public --registry="$registry" --loglevel=verbose >"$publish_log" 2>&1; then
+            echo "@yefengr/steward@$version published to npm." >> "$GITHUB_STEP_SUMMARY"
+          else
+            # 只输出状态码，不公开身份交换请求、响应或调试日志。
+            awk '
+              /^npm http fetch POST [0-9][0-9][0-9] https:\/\/registry\.npmjs\.org\/-\/npm\/v1\/oidc\/token\/exchange\// {
+                print "npm identity exchange: HTTP " $5
+              }
+              /^npm error code [A-Z0-9_]+$/ { print "npm publish error: " $4 }
+            ' "$publish_log" >&2
+            if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+              echo 'GitHub did not provide OIDC request credentials.' >&2
+            fi
+            exit 1
+          fi

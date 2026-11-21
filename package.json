@@ -11,7 +11,7 @@
     "test": "pnpm build:client && pnpm -r --if-present run test",
     "build": "pnpm -r --if-present run build",
     "pack:stew": "pnpm --filter @pi-steward/launcher... --filter @pi-steward/pi-extension... run build && node scripts/pack-stew.mjs",
-    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+    "verify": "pnpm build && pnpm -r --if-present run typecheck && pnpm lint && pnpm -r --if-present run test"
   },
   "devDependencies": {
     "eslint": "catalog:",

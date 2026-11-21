@@ -41,6 +41,7 @@ fi
 [[ "$(docker inspect -f '{{.State.Health.Status}}' "$live")" == healthy ]]
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
+backup_started=$SECONDS
 snapshot="/data/before-deploy-$stamp.sqlite"
 compose_backup="compose.before-deploy-$stamp.yml"
 docker exec "$live" node dist/admin.js backup "$snapshot"
@@ -50,7 +51,9 @@ import { DatabaseSync } from "node:sqlite";
 const db = new DatabaseSync(process.argv[1], { readOnly: true });
 if (db.prepare("PRAGMA quick_check").get().quick_check !== "ok") process.exit(1);
 ' "$snapshot"
+printf '数据库备份与完整性检查：%s 秒\n' "$((SECONDS - backup_started))" >&2
 
+candidate_started=$SECONDS
 stage="pi-steward-candidate-$stamp"
 next_file=$(mktemp ./compose.next.XXXXXX)
 stage_id=''
@@ -84,7 +87,9 @@ const db = new DatabaseSync(join(process.env.STEWARD_DATA_DIR, "steward.sqlite")
 const version = readdirSync("/app/migrations").filter(name => /^\d{4}-[\w-]+\.sql$/.test(name)).length;
 if (db.prepare("PRAGMA user_version").get().user_version !== version || db.prepare("PRAGMA quick_check").get().quick_check !== "ok") process.exit(1);
 '
+printf '候选镜像与快照预检：%s 秒\n' "$((SECONDS - candidate_started))" >&2
 
+switch_started=$SECONDS
 awk -v old="$prior_image" -v image="$release_image" '
 $1 == "image:" && $2 == old { sub(/[^[:space:]]+$/, image); count++ }
 { print }
@@ -97,3 +102,4 @@ printf 'Compose backup: %s\n' "$compose_backup"
 mv "$next_file" compose.yml
 "${compose[@]}" up -d --no-deps --no-build platform
 verify_live
+printf '容器切换与健康检查：%s 秒\n' "$((SECONDS - switch_started))" >&2

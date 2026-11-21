@@ -28,25 +28,21 @@ docker compose --env-file /path/to/private-env -f docker/compose.example.yml up 
 
 ## 从本机更新服务器
 
-在仓库根目录用 Docker 构建 `linux/amd64` 镜像，通过本机已配置的 SSH 连接传到服务器。将 `your-steward-host` 换成服务器的 SSH 别名。以下命令使用当前提交生成镜像标签，请在干净的工作区执行。
+从仓库根目录运行更新命令，将 `your-steward-host` 换成已配置的 SSH 别名。请先启动本机 Docker 服务，并确保 Git 工作区干净。
 
 ```bash
-set -euo pipefail
-ssh_target=your-steward-host
-image="pi-steward-platform:sha-$(git rev-parse HEAD)"
-docker build --platform linux/amd64 -f docker/platform.Dockerfile -t "$image" .
-image_id=$(docker image inspect --format '{{.Id}}' "$image")
-docker image save "$image" | ssh "$ssh_target" 'docker image load --quiet'
-ssh "$ssh_target" "bash -s -- '$image' '$image_id'" < scripts/deploy-platform.sh
+bash scripts/update-platform.sh your-steward-host
 ```
+
+脚本从当前 Git 提交构建 `linux/amd64` 镜像。重试时会复用本机带有相同提交标记的镜像，服务器已加载同一个镜像时会跳过上传。首次构建或依赖变化时可能需要几分钟，请让构建进程持续运行。脚本分别记录构建、传输和部署耗时。
 
 部署脚本适用于当前线上 Compose 布局。它备份数据库，用快照副本验证候选镜像，再更新服务并检查健康状态。脚本会打印 Compose 备份和数据库快照路径。数据库升级后，如需回退，先核对旧镜像支持的格式和升级后新增的数据，再选恢复方式。部署失败时保留已有数据和备份供核对。
 
 ## npm 打包和发布
 
-向 GitHub 默认分支推送后，[Pack and publish Task Steward](../.github/workflows/release.yml) 会在 macOS 上验证并打包。打开该次运行的 **Artifacts** 下载 `steward-npm-package`，解压可得到 `yefengr-steward-<版本>.tgz`。也可在 Actions 手动运行工作流生成安装包。
+[Pack and publish Task Steward](../.github/workflows/release.yml) 在默认分支收到推送后，先查询 npm 上是否已有该版本。已有版本在 Linux 上运行 `pnpm verify`。新版本在 macOS 上编译双架构原生组件、验证并打包，通过后由 GitHub OIDC 发布到 `latest`。npm 查询失败时，Linux 验证仍会运行，发布会跳过。
 
-发版时更新 [`apps/launcher/package.json`](../apps/launcher/package.json) 的 `version` 并推送到默认分支。打包通过后，工作流核对 npm 版本。已发布的版本会跳过，新版本会通过 GitHub OIDC 自动发布到 `latest`。
+发版时更新 [`apps/launcher/package.json`](../apps/launcher/package.json) 的 `version` 并推送到默认分支。需要安装包时，可以在默认分支手动运行该工作流。手动运行只验证和打包。在打包任务的 **Artifacts** 下载 `steward-npm-package`，解压后得到 `yefengr-steward-<版本>.tgz`。
 
 首次启用时，在 npm 为 `@yefengr/steward` 配置 Trusted Publisher，绑定 `yefengr/task-steward`、`release.yml` 和环境 `npm-release`，启用 `npm publish` 权限。
 

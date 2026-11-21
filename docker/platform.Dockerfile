@@ -1,22 +1,24 @@
 # 从仓库根目录构建：docker build -f docker/platform.Dockerfile .
 FROM node:24.20.0-alpine AS build
 WORKDIR /source
+ARG TARGETOS
+ARG TARGETARCH
 RUN corepack enable
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.base.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY apps/platform/package.json ./apps/platform/package.json
 COPY apps/web/package.json ./apps/web/package.json
-COPY apps/launcher/package.json ./apps/launcher/package.json
-COPY packages/pi-extension/package.json ./packages/pi-extension/package.json
 COPY packages/contract/package.json ./packages/contract/package.json
-COPY packages/platform-http/package.json ./packages/platform-http/package.json
-RUN pnpm --filter @pi-steward/platform... --filter @pi-steward/web... install --frozen-lockfile
+RUN --mount=type=cache,id=pi-steward-pnpm-${TARGETOS}-${TARGETARCH},target=/pnpm/store,sharing=locked \
+    pnpm --filter @pi-steward/platform... --filter @pi-steward/web... install --frozen-lockfile --store-dir=/pnpm/store
+COPY tsconfig.base.json ./
 COPY packages/contract ./packages/contract
 COPY apps/platform ./apps/platform
 COPY apps/web ./apps/web
-RUN pnpm --filter @pi-steward/contract build && \
+RUN --mount=type=cache,id=pi-steward-pnpm-${TARGETOS}-${TARGETARCH},target=/pnpm/store,sharing=locked \
+    pnpm --filter @pi-steward/contract build && \
     pnpm --filter @pi-steward/web build && \
     pnpm --filter @pi-steward/platform build && \
-    pnpm --config.inject-workspace-packages=true --filter @pi-steward/platform deploy --prod /out
+    pnpm --config.inject-workspace-packages=true --filter @pi-steward/platform deploy --prod --store-dir=/pnpm/store /out
 
 FROM node:24.20.0-alpine AS runtime
 WORKDIR /app

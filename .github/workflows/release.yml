@@ -17,8 +17,63 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  pack:
+  preflight:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      pack_required: ${{ steps.version.outputs.pack_required }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'push' && github.repository == 'yefengr/task-steward'
+        with:
+          persist-credentials: false
+      - name: Check whether to build the macOS package
+        id: version
+        env:
+          CHECK_REGISTRY: ${{ github.event_name == 'push' && github.repository == 'yefengr/task-steward' }}
+        run: |
+          if [[ "$CHECK_REGISTRY" != 'true' ]]; then
+            echo 'pack_required=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          version=$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' apps/launcher/package.json)
+          registry=https://registry.npmjs.org
+          if ! status=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$registry/@yefengr%2fsteward/$version"); then
+            echo 'Could not reach the npm registry to check the version.' >&2
+            exit 1
+          fi
+          case "$status" in
+            200)
+              echo "@yefengr/steward@$version is already published. Running verification on Linux." >> "$GITHUB_STEP_SUMMARY"
+              echo 'pack_required=false' >> "$GITHUB_OUTPUT"
+              ;;
+            404) echo 'pack_required=true' >> "$GITHUB_OUTPUT" ;;
+            *) echo "Could not check the npm version (HTTP $status)." >&2; exit 1 ;;
+          esac
+
+  verify:
+    needs: preflight
+    if: ${{ !cancelled() && (needs.preflight.result == 'failure' || needs.preflight.outputs.pack_required == 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - uses: pnpm/action-setup@v6
+      - name: Verify
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm verify
+
+  pack:
+    needs: preflight
+    if: needs.preflight.outputs.pack_required == 'true'
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
@@ -33,7 +88,7 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm verify
-          pnpm pack:stew "$RUNNER_TEMP/steward-npm"
+          node scripts/pack-stew.mjs "$RUNNER_TEMP/steward-npm"
       - uses: actions/upload-artifact@v7
         with:
           name: steward-npm-package

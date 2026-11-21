@@ -18,12 +18,8 @@
 !apps/web/THIRD_PARTY_NOTICES.md
 !apps/web/src/**
 !apps/web/public/**
-!apps/launcher/
-!apps/launcher/package.json
 !packages/
 !packages/contract/
 !packages/contract/package.json
 !packages/contract/tsconfig*.json
 !packages/contract/src/**
-!packages/pi-extension/
-!packages/pi-extension/package.json

@@ -77,6 +77,16 @@ stew pair --proxy system                  # 恢复跟随系统
 
 开发时在安装了 Xcode 或 Xcode Command Line Tools 的 Mac 上运行 `pnpm pack:stew`，会在 `.pi/tmp` 生成适用于 Apple Silicon 和 Intel Mac 的 npm 安装包。运行安装包时只需前面列出的工具。可在 Mac 的临时目录用 `npm install /绝对路径/包名.tgz` 验证安装，再通过该目录下的 `node_modules/.bin/stew` 使用命令。
 
+### 在普通 Pi 会话中管理任务
+
+先更新平台，再安装或升级到支持任务代管的 `@yefengr/steward`。已经配对的 Mac 不用重新配对，也不必启动后台服务。扩展与 `stew` 在同一个 npm 包里，不需要再用 `pi install` 安装一份。
+
+1. 在安装 `stew` 时使用的终端运行 `printf '%s\n' "$(npm root -g)/@yefengr/steward/dist/extension.js"`，得到扩展的绝对路径。
+2. 将这条路径追加到 Pi 用户设置 `~/.pi/agent/settings.json` 的 `extensions` 数组（如果不存在则新建该数组，保留其他设置）。不要把 Shell 表达式原样填入 JSON。
+3. 重新打开 Pi。可以让它先列出项目，再查任务、创建待办或补充说明。新建任务不会自动执行；安排开始和验收仍在网页上操作。
+
+普通 Pi 的工具复用电脑令牌，可读写同一平台上的任务清单。撤销这台 Mac 的电脑令牌后，自动接单和任务代管都会停用。使用自定义配对配置路径时，普通 Pi 也需要同一个 `STEWARD_CONFIG` 环境变量。
+
 ### 旧版和手动登记
 
 1. 在私密终端使用 `docker compose exec platform node dist/admin.js machine:add <名称>`。该命令在交互终端只显示机器令牌一次，也允许从标准输入接收操作者提供的令牌。给 `docker compose` 加上部署时使用的 `--env-file` 和 `-f`。

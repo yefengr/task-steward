@@ -14,8 +14,9 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: vi.fn(actual.homedir) };
 });
 
-const toolNames = ['steward_task', 'steward_progress', 'steward_ask', 'steward_question_update',
+const executionTools = ['steward_task', 'steward_progress', 'steward_ask', 'steward_question_update',
   'steward_decision', 'steward_deliver', 'steward_finish'];
+const managementTools = ['steward_list_projects', 'steward_list_tasks', 'steward_get_task', 'steward_create_task', 'steward_update_task'];
 const directories: string[] = [];
 function workspace() {
   const directory = mkdtempSync(join(tmpdir(), 'steward-extension-'));
@@ -34,10 +35,12 @@ function mockTools(fetcher: typeof fetch, options: { attemptId?: string; config?
   registerSteward({ registerTool } as unknown as ExtensionAPI, {
     env: { STEWARD_ATTEMPT_ID: options.attemptId, STEWARD_CONFIG: options.config }, fetcher,
   });
-  return { registerTool, shutdown, call: (name: string, args = {}) => {
+  const sessionId = randomUUID();
+  return { registerTool, shutdown, sessionId, call: (name: string, args = {}, signal?: AbortSignal) => {
     const tool = registerTool.mock.calls.map(([entry]) => entry).find((entry) => entry.name === name);
     if (!tool) throw new Error('工具未注册');
-    return tool.execute('test-call', args, undefined, undefined, { shutdown } as unknown as Parameters<typeof tool.execute>[4]);
+    const ctx = { shutdown, sessionManager: { getSessionId: () => sessionId } };
+    return tool.execute('test-call', args, signal, undefined, ctx as unknown as Parameters<typeof tool.execute>[4]);
   } };
 }
 function configFile(file = join(workspace(), 'config.json'), platformUrl = 'https://steward.example') {
@@ -61,23 +64,76 @@ it('扩展优先读取新默认配置，升级前的配置仍能使用', async (
   expect(fetcher.mock.calls.map(([url]) => new URL(String(url)).origin)).toEqual(['https://legacy.example', 'https://current.example']);
 });
 
-it('手动会话或无效执行编号不注册工具', () => {
-  expect(mockTools(vi.fn()).registerTool).not.toHaveBeenCalled();
-  expect(mockTools(vi.fn(), { attemptId: 'bogus' }).registerTool).not.toHaveBeenCalled();
+it('没有有效执行编号时只注册任务管理工具', () => {
+  for (const attemptId of [undefined, 'bogus']) {
+    expect(mockTools(vi.fn(), { attemptId }).registerTool.mock.calls.map(([tool]) => tool.name)).toEqual(managementTools);
+  }
 });
 
-it('Pi 1.5.2 的资源加载器可以加载编译后的正式扩展并注册全部工具', async () => {
+it.each([false, true])('Pi 资源加载器从 settings.json 加载扩展，自动执行=%s', async (automatic) => {
   const directory = workspace();
-  vi.stubEnv('STEWARD_ATTEMPT_ID', randomUUID());
+  vi.stubEnv('STEWARD_ATTEMPT_ID', automatic ? randomUUID() : undefined);
   const extension = fileURLToPath(new URL('../dist/index.js', import.meta.url));
-  const loader = new DefaultResourceLoader({ cwd: directory, agentDir: directory, additionalExtensionPaths: [extension],
-    noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
+  writeFileSync(join(directory, 'settings.json'), JSON.stringify({ extensions: [extension] }));
+  const loader = new DefaultResourceLoader({ cwd: directory, agentDir: directory,
+    additionalExtensionPaths: automatic ? [extension] : [],
+    noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
   await loader.reload();
   const { extensions, errors } = loader.getExtensions();
   expect(errors).toHaveLength(0);
-  expect(extensions.length).toBe(1);
-  expect([...extensions[0]!.tools.keys()]).toEqual(toolNames);
+  expect(extensions.filter((entry) => entry.path === extension)).toHaveLength(1);
+  expect([...extensions.find((entry) => entry.path === extension)!.tools.keys()])
+    .toEqual(automatic ? [...managementTools, ...executionTools] : managementTools);
 }, 10_000);
+
+it('普通 Pi 使用配对令牌查、建、改任务，写入附带当前会话 ID', async () => {
+  const task = { id: randomUUID(), projectId: 'steward', title: '待办', goal: '', acceptance: '', notes: '', agent: 'pi',
+    machineId: null, status: 'unscheduled', reworkPending: false, position: 1, createdBy: 'agent', version: 1,
+    createdAt: 1, updatedAt: 1, waiting: null, needsVerification: false, needsResponse: false };
+  const detail = { task, decisions: [], progress: [], questions: [], deliveries: [], attempts: [], events: [] };
+  const updated = { ...task, version: 2, acceptance: '可验证' };
+  const responses = [{ projects: [] }, { tasks: [task] }, detail, { task }, { task: updated }];
+  const fetcher = vi.fn<typeof fetch>();
+  for (const data of responses) fetcher.mockResolvedValueOnce(Response.json(data));
+  const agent = mockTools(fetcher, { config: configFile() });
+  const create = { projectId: task.projectId, title: task.title };
+  const update = { taskId: task.id, version: 1, acceptance: updated.acceptance };
+  const calls = [['steward_list_projects', {}], ['steward_list_tasks', { projectId: task.projectId }],
+    ['steward_get_task', { taskId: task.id }], ['steward_create_task', create], ['steward_update_task', update]] as const;
+  for (const [index, [name, args]] of calls.entries()) expect((await agent.call(name, args)).details).toEqual(responses[index]);
+  expect(fetcher.mock.calls.map(([url, init]) => [new URL(String(url)).pathname, init?.method])).toEqual([
+    ['/api/v1/task-management/projects', 'GET'], ['/api/v1/task-management/projects/steward/tasks', 'GET'],
+    [`/api/v1/task-management/tasks/${task.id}`, 'GET'], ['/api/v1/task-management/tasks', 'POST'],
+    [`/api/v1/task-management/tasks/${task.id}`, 'PATCH'],
+  ]);
+  for (const [, init] of fetcher.mock.calls) {
+    const headers = new Headers(init?.headers);
+    expect(headers.get('Authorization')).toMatch(/^Bearer stm_/);
+    expect(headers.has('X-Steward-Attempt-Id')).toBe(false);
+  }
+  const bodies = fetcher.mock.calls.slice(3).map(([, init]) => JSON.parse(String(init?.body)));
+  expect(bodies).toEqual([
+    { ...create, sessionId: agent.sessionId, requestId: expect.any(String) },
+    { version: 1, acceptance: updated.acceptance, sessionId: agent.sessionId, requestId: expect.any(String) },
+  ]);
+  expect(bodies.every(({ requestId }) => uuidSchema.safeParse(requestId).success)).toBe(true);
+  expect((await agent.call('steward_get_task', { taskId: '../projects' })).details).toEqual({ code: 'invalid_request' });
+  expect((await agent.call('steward_update_task', { ...update, status: 'done' })).details).toEqual({ code: 'invalid_request' });
+  expect(fetcher).toHaveBeenCalledTimes(5);
+});
+
+it('创建请求取消后使用原参数重试时复用请求 ID', async () => {
+  const controller = new AbortController();
+  const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(async () => {
+    controller.abort();
+    throw new Error('请求可能已提交');
+  }).mockResolvedValueOnce(Response.json({ error: { code: 'not_found', message: '' } }, { status: 404 }));
+  const agent = mockTools(fetcher, { config: configFile() });
+  const args = { projectId: 'steward', title: '任务' };
+  expect((await agent.call('steward_create_task', args, controller.signal)).details).toEqual({ code: 'cancelled' });
+  expect((await agent.call('steward_create_task', args)).details).toEqual({ code: 'not_found' });
+  expect(fetcher.mock.calls[0]?.[1]?.body).toBe(fetcher.mock.calls[1]?.[1]?.body);
+});
 
 it('交付未开始、失败和请求未完成时拦截 finish，确认成功后才 shutdown', async () => {
   let unblock: (response: Response) => void = () => { throw new Error('交付请求没有发出'); };

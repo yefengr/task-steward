@@ -8,6 +8,7 @@ import { ApiError, reject } from './errors.js';
 import type { Store } from './store.js';
 import { mountWeb } from './web-routes.js';
 import { mountMachineRoutes } from './machine-routes.js';
+import { mountTaskManagement } from './task-management-routes.js';
 import { mountPublicPairing } from './pairing-routes.js';
 import { mountStaticWeb } from './static-web.js';
 
@@ -53,6 +54,7 @@ export function createApp(options: AppOptions) {
   app.use('/api/v1/*', bodyLimit({ maxSize: 2 * 1024 * 1024,
     onError: (context) => context.json(errorBody('invalid_request', 'Request body too large'), 400) }));
   app.route('/api/v1/web', mountWeb(options, now));
+  app.route('/api/v1/task-management', mountTaskManagement(options.store, now));
   app.route('/api/v1', mountMachineRoutes(options.store, now));
   if (options.webDir) mountStaticWeb(app, options.webDir);
   app.notFound((context) => context.req.path === '/api' || context.req.path.startsWith('/api/')

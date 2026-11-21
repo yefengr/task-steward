@@ -30,17 +30,27 @@ function loadConfig(env: NodeJS.ProcessEnv) {
   } catch { throw new AgentError('invalid_config'); }
 }
 
-export function agentClient(attemptId: string, options: { env: NodeJS.ProcessEnv; fetcher?: typeof fetch }) {
+export type ClientOptions = { env: NodeJS.ProcessEnv; fetcher?: typeof fetch };
+
+export function agentClient(attemptId: string, options: ClientOptions) {
+  return platformClient('agent', options, { 'X-Steward-Attempt-Id': attemptId });
+}
+
+export function taskManagementClient(options: ClientOptions) {
+  return platformClient('task-management', options);
+}
+
+function platformClient(namespace: 'agent' | 'task-management', options: ClientOptions, extraHeaders?: Record<string, string>) {
   return async function request<T>(method: 'GET' | 'POST' | 'PATCH', route: string, schema: Validator<T>, body?: object, signal?: AbortSignal) {
     const config = loadConfig(options.env);
     const origin = new URL(config.platformUrl).origin;
     const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     let res: Response;
     try {
-      const url = `${origin}/api/v1/agent/${route}`;
+      const url = `${origin}/api/v1/${namespace}/${route}`;
       const init: RequestInit = {
         method, redirect: 'error', signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
-        headers: { Authorization: `Bearer ${config.machineToken}`, 'X-Steward-Attempt-Id': attemptId,
+        headers: { Authorization: `Bearer ${config.machineToken}`, ...extraHeaders,
           ...(body ? { 'Content-Type': 'application/json' } : {}) },
         body: body ? JSON.stringify(body) : undefined,
       };

@@ -4,22 +4,25 @@ import { reject } from './errors.js';
 import type { Store } from './store.js';
 import { executionMachine, requireMachine, requireProject, requireTask, taskView } from './views.js';
 
-export function createTask(store: Store, input: WebCreateTaskRequest, now: number) {
+type TaskMutationSource = { machineId: string; sessionId: string };
+
+export function createTask(store: Store, input: WebCreateTaskRequest, now: number, source?: TaskMutationSource) {
   requireProject(store, input.projectId);
   if (input.agent === 'claude') reject('invalid_request', 'Claude tasks are not supported');
   if (input.machineId) requireMachine(store, input.machineId);
   const id = randomUUID();
+  const actor = source ? 'agent' : 'user';
   store.run(`INSERT INTO tasks (id, project_id, title, goal, acceptance, notes, agent, machine_id,
     status, position, created_by, created_at, updated_at)
     VALUES (?,?,?,?,?,?,?,?,'unscheduled',
-      (SELECT COALESCE(MAX(position),0)+1 FROM tasks WHERE project_id=?),'user',?,?)`,
+      (SELECT COALESCE(MAX(position),0)+1 FROM tasks WHERE project_id=?),?,?,?)`,
   id, input.projectId, input.title, input.goal ?? '', input.acceptance ?? '', input.notes ?? '',
-  input.agent ?? 'pi', input.machineId ?? null, input.projectId, now, now);
-  store.event(id, 'user', null, 'created', { to: 'unscheduled' }, now);
+  input.agent ?? 'pi', input.machineId ?? null, input.projectId, actor, now, now);
+  store.event(id, actor, null, 'created', { to: 'unscheduled', ...source }, now);
   return { task: taskView(store, requireTask(store, id), now) };
 }
 
-export function updateTask(store: Store, id: string, input: WebUpdateTaskRequest, now: number) {
+export function updateTask(store: Store, id: string, input: WebUpdateTaskRequest, now: number, source?: TaskMutationSource) {
   const task = requireTask(store, id);
   if (task.status === 'cancelled' || task.status === 'done' || task.version !== input.version) {
     reject('conflict', 'Task is closed or its version changed');
@@ -31,7 +34,7 @@ export function updateTask(store: Store, id: string, input: WebUpdateTaskRequest
     version=version+1, updated_at=? WHERE id=?`, input.title ?? task.title, input.goal ?? task.goal,
   input.acceptance ?? task.acceptance, input.notes ?? task.notes, input.agent ?? task.agent,
   input.machineId === undefined ? task.machine_id : input.machineId, now, id);
-  store.event(id, 'user', null, 'updated', { fields }, now);
+  store.event(id, source ? 'agent' : 'user', null, 'updated', { fields, ...source }, now);
   return { task: taskView(store, requireTask(store, id), now) };
 }
 

@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import * as c from '@pi-steward/contract';
 import type { AgentToolResult, ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
-import { AgentError, agentClient, validatedBody } from './client.js';
+import { AgentError, agentClient, taskManagementClient, validatedBody } from './client.js';
+import type { ClientOptions } from './client.js';
 import { retryableWrites } from './retry-writes.js';
 
 const text = () => Type.String({ maxLength: 100_000 });
@@ -34,13 +35,61 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
   }
 }
 
+const editableTask = {
+  title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+  goal: Type.Optional(text()), acceptance: Type.Optional(text()), notes: Type.Optional(text()),
+};
+
+function registerTaskManagement(pi: ExtensionAPI, options: ClientOptions) {
+  const request = taskManagementClient(options);
+  const write = retryableWrites({ cancelledMayHaveSaved: true });
+  const projectIdParameter = Type.String({ minLength: 1, maxLength: 128 });
+  pi.registerTool({
+    name: 'steward_list_projects', label: '列出 Steward 项目', description: '列出任务平台的项目。可先查项目 ID，再列出或新建任务。',
+    parameters: Type.Object({}),
+    execute: (_id, _args, signal) => report(() => request('GET', 'projects', c.webProjectsResponseSchema, undefined, signal)),
+  });
+  pi.registerTool({
+    name: 'steward_list_tasks', label: '列出 Steward 任务', description: '按项目列出任务和当前状态。',
+    parameters: Type.Object({ projectId: projectIdParameter }),
+    execute: (_id, { projectId }, signal) => report(() => request('GET',
+      `projects/${validatedBody(c.projectIdSchema, projectId)}/tasks`, c.webProjectTasksResponseSchema, undefined, signal)),
+  });
+  pi.registerTool({
+    name: 'steward_get_task', label: '查看 Steward 任务', description: '按任务 ID 查看说明、状态、进展和交付，修改前可读取当前版本。',
+    parameters: Type.Object({ taskId: Type.String() }),
+    execute: (_id, { taskId }, signal) => report(() => request('GET',
+      `tasks/${validatedBody(c.uuidSchema, taskId)}`, c.webTaskDetailResponseSchema, undefined, signal)),
+  });
+  pi.registerTool({
+    name: 'steward_create_task', label: '新建 Steward 待办', description: '应用户要求新建待办，不安排执行。网络请求结果未知时使用原参数重试。',
+    parameters: Type.Object({ ...editableTask, projectId: projectIdParameter, title: Type.String({ minLength: 1, maxLength: 500 }) }),
+    execute: (_id, args, signal, _update, ctx) => report(() => {
+      const input = { ...args, sessionId: ctx.sessionManager.getSessionId() };
+      return write('POST', 'tasks', input, (requestId) => request('POST', 'tasks', c.webTaskMutationResponseSchema,
+        validatedBody(c.managedCreateTaskRequestSchema, { ...input, requestId }), signal));
+    }),
+  });
+  pi.registerTool({
+    name: 'steward_update_task', label: '修改 Steward 任务', description: '应用户要求修改标题、目标、验收要求或备注。传入读到的版本；若版本冲突，先重新读取并核对差异。',
+    parameters: Type.Object({ ...editableTask, taskId: Type.String(), version: Type.Integer({ minimum: 1 }) }),
+    execute: (_id, { taskId, ...args }, signal, _update, ctx) => report(() => {
+      const route = `tasks/${validatedBody(c.uuidSchema, taskId)}`;
+      const input = { ...args, sessionId: ctx.sessionManager.getSessionId() };
+      return write('PATCH', route, input, (requestId) => request('PATCH', route, c.webTaskMutationResponseSchema,
+        validatedBody(c.managedUpdateTaskRequestSchema, { ...input, requestId }), signal));
+    }),
+  });
+}
+
 function deliveryId(attemptId: string) {
   // 平台每个尝试只接受一份交付。使用派生 UUID，Pi 重载后也能重放同一请求。
   const hex = createHash('sha256').update(`pi-steward:delivery:${attemptId}`).digest('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-export function registerSteward(pi: ExtensionAPI, options: { env: NodeJS.ProcessEnv; fetcher?: typeof fetch } = { env: process.env }) {
+export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env: process.env }) {
+  registerTaskManagement(pi, options);
   const attempt = c.uuidSchema.safeParse(options.env.STEWARD_ATTEMPT_ID);
   if (!attempt.success) return;
   const request = agentClient(attempt.data, options);

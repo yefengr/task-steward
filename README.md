@@ -17,13 +17,15 @@ Task Steward 是面向个人的跨电脑任务清单与执行协调系统。你�
 
 ## 本地开发
 
-在仓库根目录用 Node 24.20.0 或同一 Node 24 系列的更高版本、pnpm 11.20.0 运行 `pnpm install --frozen-lockfile`，再运行 `pnpm verify`。构建后可运行 `node scripts/smoke-launcher.mjs` 验证假 Agent 和 tmux 链路，或运行 `pnpm --filter @pi-steward/web test:e2e` 执行浏览器测试。发布及启动器配置见[部署与 Mac 接入](docs/DEPLOYMENT.md)。
+在仓库根目录用 Node 24.20.0 或同一 Node 24 系列的更高版本、pnpm 11.20.0 运行 `pnpm install --frozen-lockfile`，再运行 `pnpm verify`。构建后可运行 `node scripts/smoke-launcher.mjs` 验证假 Agent 和 tmux 链路，或运行 `pnpm --filter @pi-steward/web test:e2e` 执行浏览器测试。要验证真实 Pi 的两种讨论收尾入口，可运行 `node scripts/smoke-launcher.mjs --real-pi <Pi 可执行文件的绝对路径>`；该命令使用独立 tmux、本机测试平台和确定性测试模型，不调用远端模型。发布及启动器配置见[部署与 Mac 接入](docs/DEPLOYMENT.md)。
 
 ## 阅读重点
 
 本系统是一个任务台账，加上每台 Mac 上自动领取任务的启动器。平台部署在私人服务器，以单 Docker 容器运行，负责清单、领取条件、交付记录和通知，不接模型，也不托管 Agent 进程。任务怎么完成交给项目 Agent 和项目已有规范，源码与工作现场保留在执行电脑。
 
-启动器按本机空闲名额自动领取任务。Pi 已确认在后台 tmux 会话中以交互模式启动，Claude Code 的启动方式待验证。名额等于本机运行中的 Agent 进程数，默认 1；Agent 等待用户回应时进程仍在运行并占用名额，进程退出即释放。Pi 经任务扩展、Claude Code 经通用技能回报进展、问题、决定与交付，Claude Code 经 ccx 启动并通过系统提示词获得任务背景。Agent 交付后结束进程，任务进入待验收；需要修改时用户发起返修，任务优先重新领取。进程退出而没有交付时任务进入已中断，由用户决定是否重新安排。
+创建任务时可选择「实现」（默认）或「讨论」。讨论不会在一轮结束时自动交付；在原 Pi 会话发送「结束讨论」，或在工作台点击「结束讨论」，Pi 会保存结论和未决事项后退出。执行电脑离线时，工作台保留结束请求，恢复连接后再处理。两种任务都只在 Pi 明确提出问题且等待满 3 分钟时显示一条提醒；在原会话回复即可撤下提醒，聊天不会同步到工作台。
+
+启动器按本机空闲名额自动领取任务。Pi 已确认在后台 tmux 会话中以交互模式启动，Claude Code 的启动方式待验证。名额等于本机运行中的 Agent 进程数，默认 1；Agent 等待用户回应时进程仍在运行并占用名额，进程退出即释放。Pi 经任务扩展、Claude Code 经通用技能回报进展、问题、决定与交付，Claude Code 经 ccx 启动并通过系统提示词获得任务背景。Agent 保存交付时，任务进入待验收；启动器确认进程退出后才释放名额。需要修改时用户发起返修，任务优先重新领取。进程退出而没有交付时任务进入已中断，由用户决定是否重新安排。
 
 对话通过各 Agent 的远程入口进行：任务记录执行电脑、Agent 类型与会话标识，Pi 会话在 Pi Reach 打开，Claude Code 会话经 Remote Control 打开，精确会话深链作为后续增强。首版先接 Pi，任务在创建时指定 Agent。Agent 还可以在用户要求时代为查看、创建和修改任务，安排开始与验收仍由用户在平台操作。依赖默认等待前项验收通过，也可选择交付后继续；待验收超过上限时暂停领取普通任务，返修不受限制。
 

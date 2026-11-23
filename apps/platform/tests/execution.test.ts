@@ -93,6 +93,8 @@ it('幂等绑定操作、载荷、尝试和问题，保留七天', async () => {
   expect(context).toMatchObject({ task: { title: '标题', goal: '目标', acceptance: '验收', notes: '说明' }, workspace: { path: project.path },
     decisions: [{ text: '决定', confirmedByUser: true }], questions: [{ id: question2.questionId }] });
   expect(context.workspace.requirements).not.toHaveLength(0);
+  expect((await x.detail(task.id)).task.needsResponse).toBe(false);
+  x.advance(c.REPLY_REMINDER_DELAY_MS);
   expect((await x.detail(task.id)).task.needsResponse).toBe(true);
   expect((await x.agent(a.id, `/questions/${question2.questionId}`, request({ status: 'withdrawn' }), 'PATCH')).status).toBe(200);
   expect((await x.detail(task.id)).task.needsResponse).toBe(false);

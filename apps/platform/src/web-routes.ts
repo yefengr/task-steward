@@ -7,7 +7,7 @@ import type { AppOptions } from './app.js';
 import { createWebSession, deleteWebSession, LoginLimiter, loginSource, originConfig, passwordVerifier, SESSION_COOKIE, webSessionValid } from './auth.js';
 import { reject } from './errors.js';
 import { mountWebPairing } from './pairing-routes.js';
-import { createTask, taskAction, updateTask } from './tasks.js';
+import { createTask, requestDiscussionEnd, taskAction, updateTask } from './tasks.js';
 import { machineViews, projectViews, requireProject, taskDetail, taskView } from './views.js';
 import type { TaskRow } from './views.js';
 
@@ -74,6 +74,15 @@ export function mountWeb(options: AppOptions, now: () => number) {
     const id = routeParam(context.req.param('id'), c.uuidSchema);
     const input = await jsonInput(context, c.webUpdateTaskRequestSchema);
     return context.json(store.immediate(() => c.webTaskMutationResponseSchema.parse(updateTask(store, id, input, now()))));
+  });
+  web.post('/tasks/:id/end-discussion', async (context) => {
+    const id = routeParam(context.req.param('id'), c.uuidSchema);
+    const { attemptId } = await jsonInput(context, c.webEndDiscussionRequestSchema);
+    return context.json(store.immediate(() => {
+      const time = now();
+      const task = requestDiscussionEnd(store, id, attemptId, 'user', time);
+      return c.webTaskMutationResponseSchema.parse({ task: taskView(store, task, time) });
+    }));
   });
   for (const action of ['schedule', 'unschedule', 'reschedule', 'cancel', 'accept', 'rework'] as const) {
     web.post(`/tasks/:id/${action}`, async (context) => {

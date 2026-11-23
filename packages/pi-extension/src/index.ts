@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import * as c from '@pi-steward/contract';
 import type { AgentToolResult, ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
+import { registerAttemptControl } from './attempt-control.js';
 import { AgentError, agentClient, taskManagementClient, validatedBody } from './client.js';
 import type { ClientOptions } from './client.js';
 import { retryableWrites } from './retry-writes.js';
@@ -62,8 +63,9 @@ function registerTaskManagement(pi: ExtensionAPI, options: ClientOptions) {
       `tasks/${validatedBody(c.uuidSchema, taskId)}`, c.webTaskDetailResponseSchema, undefined, signal)),
   });
   pi.registerTool({
-    name: 'steward_create_task', label: '新建 Steward 待办', description: '应用户要求新建待办，不安排执行。网络请求结果未知时使用原参数重试。',
-    parameters: Type.Object({ ...editableTask, projectId: projectIdParameter, title: Type.String({ minLength: 1, maxLength: 500 }) }),
+    name: 'steward_create_task', label: '新建 Steward 待办', description: '应用户要求新建待办，不安排执行。选择 discussion（讨论）或 implementation（实现，默认）。网络请求结果未知时使用原参数重试。',
+    parameters: Type.Object({ ...editableTask, projectId: projectIdParameter, title: Type.String({ minLength: 1, maxLength: 500 }),
+      type: Type.Optional(Type.Union([Type.Literal('discussion'), Type.Literal('implementation')])) }),
     execute: (_id, args, signal, _update, ctx) => report(() => {
       const input = { ...args, sessionId: ctx.sessionManager.getSessionId() };
       return write('POST', 'tasks', input, (requestId) => request('POST', 'tasks', c.webTaskMutationResponseSchema,
@@ -93,6 +95,7 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
   const attempt = c.uuidSchema.safeParse(options.env.STEWARD_ATTEMPT_ID);
   if (!attempt.success) return;
   const request = agentClient(attempt.data, options);
+  const control = registerAttemptControl(pi, attempt.data, request);
   const write = retryableWrites();
   const requestId = deliveryId(attempt.data);
   let delivered = false;
@@ -100,7 +103,11 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
   pi.registerTool({
     name: 'steward_task', label: '读取 Steward 任务', description: '读取本次任务的目标、验收要求、决定、交付与返修反馈。',
     parameters: Type.Object({}),
-    execute: (_id, _args, signal) => report(() => request('GET', 'context', c.agentContextResponseSchema, undefined, signal)),
+    execute: (_id, _args, signal) => report(async () => {
+      const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
+      control.noteTaskType(data.task.type);
+      return data;
+    }),
   });
   pi.registerTool({
     name: 'steward_progress', label: '记录 Steward 进展', description: '在关键节点回报可核验的进展和剩余步骤。',
@@ -111,8 +118,8 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
   pi.registerTool({
     name: 'steward_ask', label: '提出 Steward 问题', description: '记录需要用户回应的问题，随后在 Pi 会话中等待。',
     parameters: Type.Object({ text: text(), context: text() }),
-    execute: (_id, args, signal) => report(() => write('POST', 'questions', args, (id) => request('POST', 'questions', c.agentCreateQuestionResponseSchema,
-      validatedBody(c.agentCreateQuestionRequestSchema, { ...args, requestId: id }), signal))),
+    execute: (_id, args, signal) => report(() => control.ask(() => write('POST', 'questions', args, (id) => request('POST', 'questions', c.agentCreateQuestionResponseSchema,
+      validatedBody(c.agentCreateQuestionRequestSchema, { ...args, requestId: id }), signal)), signal)),
   });
   pi.registerTool({
     name: 'steward_question_update', label: '更新 Steward 问题', description: '将已经回答或不再需要的本次任务问题标为已解决或撤销。',
@@ -143,9 +150,9 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
     name: 'steward_finish', label: '结束 Steward 执行', description: '交付已确认保存且本次执行已收尾时，请求 Pi 结束。',
     parameters: Type.Object({}),
     async execute(_id, _args, _signal, _update, ctx): Promise<AgentToolResult<{ code: string } | { ok: boolean }>> {
-      if (!delivered) return result('尚未确认保存交付，不能结束。若用户要放弃任务，请用户在平台取消或在 Pi 中直接退出。',
+      if (!delivered && !control.deliverySaved) return result('尚未确认保存交付，不能结束。若用户要放弃任务，请用户在平台取消或在 Pi 中直接退出。',
         { code: 'delivery_required' });
-      ctx.shutdown();
+      control.finish(ctx);
       return result('已请求 Pi 在本轮结束后退出。', { ok: true });
     },
   });

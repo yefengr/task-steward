@@ -31,10 +31,16 @@ export function StatusChip({ status }: { status: Task['status'] }) {
   return <span className={`chip status-${status}`}>{t.statuses[status]}</span>;
 }
 
+export function TaskTypeLabel({ task }: { task: Task }) {
+  const { t } = useI18n();
+  return <span>{t.taskTypes[task.type]}</span>;
+}
+
 export function TaskFlags({ task }: { task: Task }) {
   const { t } = useI18n();
   return <>
     {task.needsResponse && <span className="chip status-review"><MessageCircle size={13} />{t.task.needsResponse}</span>}
+    {task.discussionEndRequested && <span className="chip status-review">{t.task.discussionEndRequested}</span>}
     {task.needsVerification && <span className="chip status-interrupted"><TriangleAlert size={13} />{t.task.needsVerification}</span>}
   </>;
 }

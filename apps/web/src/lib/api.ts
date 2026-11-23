@@ -58,4 +58,5 @@ export const api = {
   action: (id: string, action: TaskAction) => write('POST', `${taskApi(id)}/${action}`, c.webTaskActionRequestSchema, {}, c.webTaskMutationResponseSchema),
   accept: (id: string, deliveryId: string) => write('POST', `${taskApi(id)}/accept`, c.webAcceptRequestSchema, { deliveryId }, c.webTaskMutationResponseSchema),
   rework: (id: string, deliveryId: string, feedback: string) => write('POST', `${taskApi(id)}/rework`, c.webReworkRequestSchema, { deliveryId, feedback }, c.webTaskMutationResponseSchema),
+  endDiscussion: (id: string, attemptId: string) => write('POST', `${taskApi(id)}/end-discussion`, c.webEndDiscussionRequestSchema, { attemptId }, c.webTaskMutationResponseSchema),
 };

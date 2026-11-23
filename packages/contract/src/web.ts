@@ -21,10 +21,11 @@ export const webTaskDetailResponseSchema = z.strictObject({
 export const webCreateTaskRequestSchema = taskContentSchema.partial().required({ title: true }).extend({
   projectId: projectIdSchema,
 });
-export const webUpdateTaskRequestSchema = taskContentSchema.partial().extend({ version: z.int().positive() })
+export const webUpdateTaskRequestSchema = taskContentSchema.omit({ type: true }).partial().extend({ version: z.int().positive() })
   .refine((input) => Object.keys(input).some((key) => key !== 'version'));
 export const webTaskMutationResponseSchema = z.strictObject({ task: taskSchema });
 export const webTaskActionRequestSchema = emptyRequestSchema;
+export const webEndDiscussionRequestSchema = z.strictObject({ attemptId: uuidSchema });
 export const webAcceptRequestSchema = z.strictObject({ deliveryId: uuidSchema });
 export const webReworkRequestSchema = webAcceptRequestSchema.extend({ feedback: nonEmptyTextSchema });
 export const webMachineSchema = z.strictObject({

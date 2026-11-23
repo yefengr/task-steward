@@ -44,6 +44,26 @@ export function Deliveries({ deliveries }: { deliveries: Delivery[] }) {
   </section>;
 }
 
+export function DiscussionHistory({ questions }: { questions: WebTaskDetailResponse['questions'] }) {
+  const { t } = useI18n();
+  if (!questions.length) return null;
+  return <details className="detail-section fold">
+    <summary><ChevronRight size={16} />{t.task.questionHistory} <span className="muted">{questions.length}</span></summary>
+    <div className="fold-body">
+      {questions.toReversed().map((question) => <div className="decision" key={question.id}>
+        <span className={`chip ${question.status === 'open' ? 'status-review' : question.status === 'resolved' ? 'status-done' : ''}`}>
+          {t.task.questionStatus[question.status]}
+        </span>
+        <div>
+          <p className="user-text">{question.text}</p>
+          {question.context && <p className="muted user-text">{question.context}</p>}
+          <span className="muted small"><DateTime value={question.createdAt} /></span>
+        </div>
+      </div>)}
+    </div>
+  </details>;
+}
+
 function AttemptRecord({ attempt }: { attempt: Attempt }) {
   const { t } = useI18n();
   const results = { delivered: t.task.resultDelivered, interrupted: t.task.resultInterrupted, cancelled: t.task.resultCancelled };

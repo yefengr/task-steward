@@ -14,7 +14,7 @@ import { openStore, sha256, Store } from '../src/store.js';
 it('迁移空库并开启外键，重复打开保留版本和数据', () => {
   const store = openStore(':memory:');
   try {
-    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 2 });
+    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 3 });
     expect(store.get('PRAGMA foreign_keys')).toMatchObject({ foreign_keys: 1 });
     expect(store.get('PRAGMA busy_timeout')).toMatchObject({ timeout: 5000 });
     expect(() => store.run('INSERT INTO projects VALUES (?,?,?,?)', 'project', 'Project', 'missing', 100)).toThrow(/FOREIGN KEY/);
@@ -35,7 +35,7 @@ it('升级原有数据库时建立配对表并保留已有机器及凭据', asyn
     } finally { connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 2 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 3 });
       expect(upgraded.all('SELECT * FROM machine_pairings')).toEqual([]);
       expect(upgraded.get('SELECT name, token_hash FROM machines')).toEqual({ name: 'Existing Mac', token_hash: sha256(token) });
     } finally { upgraded.connection.close(); }

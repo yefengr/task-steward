@@ -48,7 +48,7 @@ describe('task management', () => {
     const auth = { machine: f.token };
     const task = await mutation(await f.send(`${management}/tasks`, input, auth), 201);
     expect(task).toMatchObject({ projectId: project.id, title: 'New', goal: 'Goal', acceptance: 'Criteria', notes: 'Notes',
-      status: 'unscheduled', agent: 'pi', machineId: null, createdBy: 'agent', version: 1 });
+      type: 'implementation', status: 'unscheduled', agent: 'pi', machineId: null, createdBy: 'agent', version: 1 });
     expect(await mutation(await f.send(`${management}/tasks`, input, auth), 201)).toEqual(task);
     await errorCode(await f.send(`${management}/tasks`, { ...input, title: 'Changed' }, auth), 409, 'conflict');
 

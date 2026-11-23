@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { agentSchema, nonEmptyTextSchema, projectIdSchema, taskStatusSchema, textSchema, timestampSchema, tmuxSessionSchema, uuidSchema } from './core.js';
 
 export const titleSchema = z.string().trim().min(1).max(500);
+export const taskTypeSchema = z.enum(['discussion', 'implementation']);
+export type TaskType = z.infer<typeof taskTypeSchema>;
 export const attemptKindSchema = z.enum(['new', 'rework']);
 export const attemptResultSchema = z.enum(['delivered', 'interrupted', 'cancelled']);
 export const waitingReasonSchema = z.enum([
@@ -11,13 +13,14 @@ export const questionStatusSchema = z.enum(['open', 'resolved', 'withdrawn']);
 export const slotsSchema = z.int().min(0).max(1000);
 export const taskContentSchema = z.strictObject({
   title: titleSchema, goal: textSchema, acceptance: textSchema, notes: textSchema,
-  agent: agentSchema, machineId: uuidSchema.nullable(),
+  agent: agentSchema, machineId: uuidSchema.nullable(), type: taskTypeSchema,
 });
 export const taskSchema = taskContentSchema.extend({
   id: uuidSchema, projectId: projectIdSchema, status: taskStatusSchema, reworkPending: z.boolean(),
   position: z.int().positive(), createdBy: z.enum(['user', 'agent']), version: z.int().positive(),
   createdAt: timestampSchema, updatedAt: timestampSchema, waiting: waitingReasonSchema.nullable(),
-  needsVerification: z.boolean(), needsResponse: z.boolean(),
+  needsVerification: z.boolean(), needsResponse: z.boolean(), discussionEndRequested: z.boolean().default(false),
+  type: taskTypeSchema.default('implementation'),
 });
 export const attemptSchema = z.strictObject({
   id: uuidSchema, taskId: uuidSchema, machineId: uuidSchema, machineName: z.string(), agent: agentSchema,

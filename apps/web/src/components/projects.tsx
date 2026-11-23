@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { projectPath, taskPath } from '../lib/paths';
 import { useResource } from '../lib/resource';
-import { Empty, ErrorNotice, Loading, TaskFlags, WaitReason } from './common';
+import { Empty, ErrorNotice, Loading, TaskFlags, TaskTypeLabel, WaitReason } from './common';
 
 const openGroups = ['running', 'review', 'interrupted', 'queued', 'unscheduled'] as const;
 const closedGroups = ['done', 'cancelled'] as const;
@@ -27,8 +27,9 @@ function TaskRow({ task, machines }: { task: Task; machines: WebMachine[] }) {
   const machine = machines.find((machine) => machine.id === task.machineId);
   return <Link href={taskPath(task.id)} className="row">
     <span className="row-title">{task.title}</span>
-    {(task.needsResponse || task.needsVerification) && <span className="row-side"><TaskFlags task={task} /></span>}
+    {(task.needsResponse || task.needsVerification || task.discussionEndRequested) && <span className="row-side"><TaskFlags task={task} /></span>}
     <span className="row-sub">
+      <TaskTypeLabel task={task} />
       <span>{task.agent === 'pi' ? 'Pi' : t.form.claude}</span>
       {machine && <span>{machine.name}</span>}
       {task.createdBy === 'agent' && <span>{t.task.createdByAgent}</span>}

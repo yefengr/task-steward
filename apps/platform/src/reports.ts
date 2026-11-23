@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentContextResponse, AgentDeliveryRequest, AgentDeliveryResponse } from '@pi-steward/contract';
+import type { AgentContextResponse, AgentControlResponse, AgentDeliveryRequest, AgentDeliveryResponse } from '@pi-steward/contract';
 import { reject } from './errors.js';
 import type { Store } from './store.js';
-import { decisionViews, deliveryViews, questionViews, requireTask } from './views.js';
+import { decisionViews, deliveryViews, questionViews, replyWait, requireTask } from './views.js';
 import type { AttemptRow } from './views.js';
 
 const ok = { ok: true } as const;
@@ -13,11 +13,20 @@ const workspaceRequirements = [
 
 export function agentContext(store: Store, attempt: AttemptRow): AgentContextResponse {
   const task = requireTask(store, attempt.task_id);
-  return { task: { id: task.id, projectId: task.project_id, title: task.title, goal: task.goal,
+  return { task: { id: task.id, projectId: task.project_id, type: task.type, title: task.title, goal: task.goal,
     acceptance: task.acceptance, notes: task.notes }, attempt: { id: attempt.id, kind: attempt.kind },
   workspace: { path: attempt.workspace_path, requirements: workspaceRequirements }, deliveries: deliveryViews(store, task.id),
   decisions: decisionViews(store, task.id).filter((decision): decision is typeof decision & { confirmedByUser: true } => decision.confirmedByUser),
   questions: questionViews(store, task.id).filter((question): question is typeof question & { status: 'open' } => question.status === 'open') };
+}
+
+export function agentControl(store: Store, attempt: AttemptRow): AgentControlResponse {
+  return {
+    type: requireTask(store, attempt.task_id).type,
+    discussionEndRequested: attempt.discussion_end_requested_at !== null,
+    deliverySaved: !!store.get('SELECT 1 FROM deliveries WHERE attempt_id=?', attempt.id),
+    waitId: replyWait(store, attempt)?.id ?? null,
+  };
 }
 
 export function addProgress(store: Store, attempt: AttemptRow, text: string, now: number) {
@@ -26,8 +35,18 @@ export function addProgress(store: Store, attempt: AttemptRow, text: string, now
 }
 export function addQuestion(store: Store, attempt: AttemptRow, input: { text: string; context: string }, now: number) {
   const questionId = randomUUID();
-  store.run("INSERT INTO questions VALUES (?,?,?,?,?,'open',?,?)", questionId, attempt.task_id, attempt.id, input.text, input.context, now, now);
-  return { questionId };
+  const task = requireTask(store, attempt.task_id);
+  // 只复制当前仍有未关闭问题的等待组，保留首问的计时起点。
+  const wait = task.status === 'running' && attempt.discussion_end_requested_at === null
+    ? replyWait(store, attempt) ?? { id: questionId, since: now } : undefined;
+  store.run(`INSERT INTO questions (id, task_id, attempt_id, text, context, status, created_at, updated_at, wait_id, wait_since)
+    VALUES (?,?,?,?,?,'open',?,?,?,?)`, questionId, attempt.task_id, attempt.id, input.text, input.context, now, now,
+  wait?.id ?? null, wait?.since ?? null);
+  return wait ? { questionId, waitId: wait.id } : { questionId };
+}
+export function recordReply(store: Store, attempt: AttemptRow, waitId: string) {
+  store.run('UPDATE questions SET wait_id=NULL, wait_since=NULL WHERE attempt_id=? AND wait_id=?', attempt.id, waitId);
+  return ok;
 }
 export function updateQuestion(store: Store, attempt: AttemptRow, questionId: string, status: 'resolved' | 'withdrawn', now: number) {
   const question = store.get<{ task_id: string; status: string }>('SELECT task_id, status FROM questions WHERE id=?', questionId);
@@ -46,6 +65,9 @@ export function deliver(store: Store, attempt: AttemptRow, input: AgentDeliveryR
   const task = requireTask(store, attempt.task_id);
   if (task.status !== 'running' || store.get('SELECT 1 FROM deliveries WHERE attempt_id=?', attempt.id)) {
     reject('conflict', 'This attempt cannot submit another delivery');
+  }
+  if (task.type === 'discussion' && attempt.discussion_end_requested_at === null) {
+    reject('conflict', 'Discussion must be ended before delivery');
   }
   const deliveryId = randomUUID();
   const { version } = store.get<{ version: number }>('SELECT COALESCE(MAX(version),0)+1 version FROM deliveries WHERE task_id=?', task.id)!;

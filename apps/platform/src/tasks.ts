@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { TaskStatus, WebCreateTaskRequest, WebUpdateTaskRequest } from '@pi-steward/contract';
 import { reject } from './errors.js';
 import type { Store } from './store.js';
-import { executionMachine, requireMachine, requireProject, requireTask, taskView } from './views.js';
+import { activeAttempt, executionMachine, requireMachine, requireProject, requireTask, taskView } from './views.js';
 
 type TaskMutationSource = { machineId: string; sessionId: string };
 
@@ -12,14 +12,28 @@ export function createTask(store: Store, input: WebCreateTaskRequest, now: numbe
   if (input.machineId) requireMachine(store, input.machineId);
   const id = randomUUID();
   const actor = source ? 'agent' : 'user';
-  store.run(`INSERT INTO tasks (id, project_id, title, goal, acceptance, notes, agent, machine_id,
+  store.run(`INSERT INTO tasks (id, project_id, title, goal, acceptance, notes, agent, machine_id, type,
     status, position, created_by, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,'unscheduled',
+    VALUES (?,?,?,?,?,?,?,?,?,'unscheduled',
       (SELECT COALESCE(MAX(position),0)+1 FROM tasks WHERE project_id=?),?,?,?)`,
   id, input.projectId, input.title, input.goal ?? '', input.acceptance ?? '', input.notes ?? '',
-  input.agent ?? 'pi', input.machineId ?? null, input.projectId, actor, now, now);
+  input.agent ?? 'pi', input.machineId ?? null, input.type ?? 'implementation', input.projectId, actor, now, now);
   store.event(id, actor, null, 'created', { to: 'unscheduled', ...source }, now);
   return { task: taskView(store, requireTask(store, id), now) };
+}
+
+export function requestDiscussionEnd(store: Store, taskId: string, attemptId: string, actor: 'user' | 'agent', now: number) {
+  const task = requireTask(store, taskId);
+  const active = activeAttempt(store, taskId);
+  if (task.type !== 'discussion' || active?.id !== attemptId || active.cancel_requested ||
+      (task.status !== 'running' && (actor === 'user' || active.discussion_end_requested_at === null))) {
+    reject('conflict', 'Only the active discussion attempt can be ended');
+  }
+  if (active.discussion_end_requested_at === null) {
+    store.run('UPDATE attempts SET discussion_end_requested_at=? WHERE id=?', now, active.id);
+    store.event(task.id, actor, active.id, 'discussion_end_requested', {}, now);
+  }
+  return task;
 }
 
 export function updateTask(store: Store, id: string, input: WebUpdateTaskRequest, now: number, source?: TaskMutationSource) {

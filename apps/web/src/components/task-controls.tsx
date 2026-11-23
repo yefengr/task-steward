@@ -13,15 +13,20 @@ const primaryActions: Partial<Record<Task['status'], TaskAction>> = {
   unscheduled: 'schedule', queued: 'unschedule', interrupted: 'reschedule',
 };
 
-export function TaskControls({ task, delivery, onEdit, onChanged }: {
-  task: Task; delivery?: Delivery; onEdit: () => void; onChanged: () => void;
+export function TaskControls({ task, delivery, activeAttemptId, onEdit, onChanged }: {
+  task: Task; delivery?: Delivery; activeAttemptId?: string; onEdit: () => void; onChanged: () => void;
 }) {
   const { t } = useI18n();
   const [confirmation, setConfirmation] = useState<Confirmation>();
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
+  const [ending, setEnding] = useState(false);
+  const [endRequestedFor, setEndRequestedFor] = useState<string>();
+  const endRequested = activeAttemptId !== undefined && endRequestedFor === activeAttemptId;
   const closed = task.status === 'done' || task.status === 'cancelled';
   const primary = task.reworkPending && task.status === 'queued' ? undefined : primaryActions[task.status];
+  const canEndDiscussion = task.type === 'discussion' && task.status === 'running' && Boolean(activeAttemptId)
+    && !task.discussionEndRequested && !endRequested;
   async function execute(action: TaskAction) {
     setBusy(true);
     setError(undefined);
@@ -29,10 +34,20 @@ export function TaskControls({ task, delivery, onEdit, onChanged }: {
     catch (error) { setError(error); }
     finally { setBusy(false); onChanged(); }
   }
+  async function endDiscussion() {
+    if (!activeAttemptId || ending || endRequested) return;
+    setEnding(true);
+    setError(undefined);
+    try { await api.endDiscussion(task.id, activeAttemptId); setEndRequestedFor(activeAttemptId); }
+    catch (error) { setError(error); }
+    finally { setEnding(false); onChanged(); }
+  }
   return <>
     {!closed && <div className="action-bar">
       {primary && <Button loading={busy} variant={primary === 'unschedule' ? 'light' : 'filled'}
         onClick={() => void execute(primary)}>{t.actions[primary]}</Button>}
+      {canEndDiscussion && <Button loading={ending} disabled={busy}
+        onClick={() => void endDiscussion()}>{t.actions.endDiscussion}</Button>}
       {task.status === 'review' && delivery?.review === null && <>
         <Button onClick={() => setConfirmation({ action: 'accept', delivery })}>{t.actions.accept} · v{delivery.version}</Button>
         <Button variant="light" onClick={() => setConfirmation({ action: 'rework', delivery })}>{t.actions.rework}</Button>

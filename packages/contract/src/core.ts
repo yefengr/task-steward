@@ -26,6 +26,7 @@ export const emptyRequestSchema = z.strictObject({});
 export const okResponseSchema = z.strictObject({ ok: z.literal(true) });
 export const requestIdSchema = z.strictObject({ requestId: uuidSchema });
 
+export const REPLY_REMINDER_DELAY_MS = 180_000;
 export const HEARTBEAT_INTERVAL_MS = 15_000;
 export const LEASE_DURATION_MS = 90_000;
 export const MACHINE_ONLINE_WINDOW_MS = 45_000;

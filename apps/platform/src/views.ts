@@ -1,17 +1,18 @@
-import { MACHINE_ONLINE_WINDOW_MS, taskStatusSchema } from '@pi-steward/contract';
-import type { Agent, Attempt, Delivery, Task, TaskStatus, WaitingReason, WebMachine, WebProject, WebTaskDetailResponse } from '@pi-steward/contract';
+import { REPLY_REMINDER_DELAY_MS, MACHINE_ONLINE_WINDOW_MS, taskStatusSchema } from '@pi-steward/contract';
+import type { Agent, Attempt, Delivery, Task, TaskStatus, TaskType, WaitingReason, WebMachine, WebProject, WebTaskDetailResponse } from '@pi-steward/contract';
 import { reject } from './errors.js';
 import type { Store } from './store.js';
 
 export interface TaskRow {
   id: string; project_id: string; title: string; goal: string; acceptance: string; notes: string; agent: Agent;
-  machine_id: string | null; status: TaskStatus; rework_pending: number; position: number;
+  machine_id: string | null; type: TaskType; status: TaskStatus; rework_pending: number; position: number;
   created_by: 'user' | 'agent'; version: number; created_at: number; updated_at: number;
 }
 export interface AttemptRow {
   id: string; task_id: string; machine_id: string; agent: Agent; kind: Attempt['kind']; session_id: string;
   tmux_session: string | null; claimed_at: number; started_at: number | null; lease_expires_at: number;
-  cancel_requested: number; ended_at: number | null; exit_code: number | null; result: Attempt['result']; workspace_path: string;
+  cancel_requested: number; discussion_end_requested_at: number | null; ended_at: number | null;
+  exit_code: number | null; result: Attempt['result']; workspace_path: string;
 }
 interface MachineRow {
   id: string; name: string; revoked_at: number | null; slots: number; last_seen_at: number | null;
@@ -59,6 +60,10 @@ export function occupiedSlots(store: Store, machineId: string) {
 export function activeAttempt(store: Store, taskId: string) {
   return store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? AND ended_at IS NULL', taskId);
 }
+export function replyWait(store: Store, attempt: AttemptRow) {
+  return store.get<{ id: string; since: number }>(`SELECT wait_id id, wait_since since FROM questions
+    WHERE task_id=? AND attempt_id=? AND status='open' AND wait_id IS NOT NULL LIMIT 1`, attempt.task_id, attempt.id);
+}
 export function isOnline(machine: MachineRow, now: number) {
   return machine.revoked_at === null && machine.last_seen_at !== null && now - machine.last_seen_at <= MACHINE_ONLINE_WINDOW_MS;
 }
@@ -77,13 +82,16 @@ function waiting(store: Store, task: TaskRow, active: AttemptRow | undefined, no
 }
 export function taskView(store: Store, task: TaskRow, now: number): Task {
   const active = activeAttempt(store, task.id);
+  const running = task.status === 'running' && active && !active.cancel_requested ? active : undefined;
+  const discussionEndRequested = running !== undefined && running.discussion_end_requested_at !== null;
+  const wait = running && !discussionEndRequested ? replyWait(store, running) : undefined;
   return {
     id: task.id, projectId: task.project_id, title: task.title, goal: task.goal, acceptance: task.acceptance,
-    notes: task.notes, agent: task.agent, machineId: task.machine_id, status: task.status,
+    notes: task.notes, agent: task.agent, machineId: task.machine_id, type: task.type, status: task.status,
     reworkPending: Boolean(task.rework_pending), position: task.position, createdBy: task.created_by,
     version: task.version, createdAt: task.created_at, updatedAt: task.updated_at,
     waiting: waiting(store, task, active, now), needsVerification: active !== undefined && active.lease_expires_at < now,
-    needsResponse: !!store.get("SELECT 1 FROM questions WHERE task_id=? AND status='open'", task.id),
+    discussionEndRequested, needsResponse: wait !== undefined && now - wait.since >= REPLY_REMINDER_DELAY_MS,
   };
 }
 export function deliveryViews(store: Store, taskId: string): Delivery[] {

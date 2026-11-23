@@ -65,6 +65,9 @@ function platformApi(origin: string, token: string) {
     deliver: async (id: string, summary: string) => c.agentDeliveryResponseSchema.parse(await post('/agent/deliveries', {
       requestId: randomUUID(), summary, done: ['已保存任务详情'], notCovered: [], verification: ['运行检查通过'], howTo: [], issues: [],
     }, id)),
+    question: async (id: string, text: string) => c.agentCreateQuestionResponseSchema.parse(await post('/agent/questions', {
+      requestId: randomUUID(), text, context: '来自讨论任务的显式问题',
+    }, id)),
     exited: async (id: string) => c.launcherExitedResponseSchema.parse(await post(`/launcher/attempts/${id}/exited`,
       { requestId: randomUUID(), exitCode: 0, endedAt: Date.now() })),
   };

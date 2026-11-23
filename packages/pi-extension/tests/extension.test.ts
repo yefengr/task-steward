@@ -32,7 +32,7 @@ const delivery = { summary: '结果', done: ['完成'], notCovered: [], verifica
 function mockTools(fetcher: typeof fetch, options: { attemptId?: string; config?: string } = {}) {
   const registerTool = vi.fn<ExtensionAPI['registerTool']>();
   const shutdown = vi.fn();
-  registerSteward({ registerTool } as unknown as ExtensionAPI, {
+  registerSteward({ registerTool, on: vi.fn() } as unknown as ExtensionAPI, {
     env: { STEWARD_ATTEMPT_ID: options.attemptId, STEWARD_CONFIG: options.config }, fetcher,
   });
   const sessionId = randomUUID();
@@ -89,14 +89,15 @@ it.each([false, true])('Pi 资源加载器从 settings.json 加载扩展，自�
 it('普通 Pi 使用配对令牌查、建、改任务，写入附带当前会话 ID', async () => {
   const task = { id: randomUUID(), projectId: 'steward', title: '待办', goal: '', acceptance: '', notes: '', agent: 'pi',
     machineId: null, status: 'unscheduled', reworkPending: false, position: 1, createdBy: 'agent', version: 1,
-    createdAt: 1, updatedAt: 1, waiting: null, needsVerification: false, needsResponse: false };
+    createdAt: 1, updatedAt: 1, waiting: null, needsVerification: false, needsResponse: false,
+    type: 'discussion', discussionEndRequested: false };
   const detail = { task, decisions: [], progress: [], questions: [], deliveries: [], attempts: [], events: [] };
   const updated = { ...task, version: 2, acceptance: '可验证' };
   const responses = [{ projects: [] }, { tasks: [task] }, detail, { task }, { task: updated }];
   const fetcher = vi.fn<typeof fetch>();
   for (const data of responses) fetcher.mockResolvedValueOnce(Response.json(data));
   const agent = mockTools(fetcher, { config: configFile() });
-  const create = { projectId: task.projectId, title: task.title };
+  const create = { projectId: task.projectId, title: task.title, type: task.type };
   const update = { taskId: task.id, version: 1, acceptance: updated.acceptance };
   const calls = [['steward_list_projects', {}], ['steward_list_tasks', { projectId: task.projectId }],
     ['steward_get_task', { taskId: task.id }], ['steward_create_task', create], ['steward_update_task', update]] as const;

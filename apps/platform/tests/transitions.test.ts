@@ -10,7 +10,7 @@ it('创建、编辑、版本冲突、安排、撤回、退出中断、重新安�
   expect((await x.app.request('/health')).status).toBe(200);
   expect((await x.heartbeat()).status).toBe(200);
   const task = await x.create();
-  expect(task).toMatchObject({ status: 'unscheduled', version: 1, position: 1 });
+  expect(task).toMatchObject({ type: 'implementation', status: 'unscheduled', version: 1, position: 1 });
   await errorCode(await x.action(task.id, 'unschedule'), 409, 'conflict');
   await errorCode(await x.action(task.id, 'reschedule'), 409, 'conflict');
   await errorCode(await x.action(task.id, 'accept', { deliveryId: randomUUID() }), 409, 'conflict');

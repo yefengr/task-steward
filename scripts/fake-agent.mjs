@@ -13,7 +13,7 @@ async function main() {
   if (!cwd.startsWith(`${dirname(config)}/`) || !cwd.endsWith('/中文 project #{pane_id};')) throw new Error();
   const { default: load } = await import(pathToFileURL(extension).href);
   const tools = new Map();
-  load({ registerTool: (tool) => tools.set(tool.name, tool) });
+  load({ registerTool: (tool) => tools.set(tool.name, tool), on: () => () => {} });
   let stopped = false;
   async function call(tool, args = {}) {
     const result = await tools.get(`steward_${tool}`).execute(`fake-${tool}`, args, undefined, undefined, { shutdown: () => { stopped = true; } });

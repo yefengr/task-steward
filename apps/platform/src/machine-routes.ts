@@ -6,8 +6,9 @@ import { jsonInput, routeParam } from './app.js';
 import { requireMachineAuth } from './auth.js';
 import { reject } from './errors.js';
 import { claim, exited, heartbeat, started } from './execution.js';
-import { addDecision, addProgress, addQuestion, agentContext, deliver, updateQuestion } from './reports.js';
+import { addDecision, addProgress, addQuestion, agentContext, agentControl, deliver, recordReply, updateQuestion } from './reports.js';
 import type { Store } from './store.js';
+import { requestDiscussionEnd } from './tasks.js';
 import { ownedAttempt, requireLiveAttempt } from './views.js';
 import type { AttemptRow } from './views.js';
 
@@ -49,6 +50,12 @@ export function mountMachineRoutes(store: Store, now: () => number) {
     requireLiveAttempt(store, attempt);
     return context.json(c.agentContextResponseSchema.parse(agentContext(store, attempt)));
   });
+  api.get('/agent/control', (context) => {
+    const machineId = authenticate(context);
+    const attempt = ownedAttempt(store, attemptHeader(context), machineId);
+    requireLiveAttempt(store, attempt);
+    return context.json(c.agentControlResponseSchema.parse(agentControl(store, attempt)));
+  });
   const agentWrite = <T extends { requestId: string }, R>(operation: string, input: z.ZodType<T>, output: z.ZodType<R>,
     apply: (attempt: AttemptRow, body: T, time: number, questionId: string) => R, questionScoped = false) => async (context: Context) => {
     authenticate(context);
@@ -72,6 +79,13 @@ export function mountMachineRoutes(store: Store, now: () => number) {
     (attempt, body, time) => addQuestion(store, attempt, body, time)));
   api.patch('/agent/questions/:id', agentWrite('update_question', c.agentUpdateQuestionRequestSchema, c.agentUpdateQuestionResponseSchema,
     (attempt, body, time, questionId) => updateQuestion(store, attempt, questionId, body.status, time), true));
+  api.post('/agent/reply', agentWrite('reply', c.agentReplyRequestSchema, c.okResponseSchema,
+    (attempt, body) => recordReply(store, attempt, body.waitId)));
+  api.post('/agent/end-discussion', agentWrite('end_discussion', c.agentEndDiscussionRequestSchema, c.okResponseSchema,
+    (attempt, _body, time) => {
+      requestDiscussionEnd(store, attempt.task_id, attempt.id, 'agent', time);
+      return { ok: true };
+    }));
   api.post('/agent/decisions', agentWrite('decision', c.agentDecisionRequestSchema, c.agentDecisionResponseSchema,
     (attempt, body, time) => addDecision(store, attempt, body, time)));
   api.post('/agent/deliveries', agentWrite('delivery', c.agentDeliveryRequestSchema, c.agentDeliveryResponseSchema,

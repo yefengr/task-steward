@@ -11,12 +11,12 @@ import { useFloatingSafeMiddlewares } from '../lib/ui/safe-area';
 import { ErrorNotice } from './common';
 
 type Draft = z.infer<typeof taskContentSchema>;
-const emptyDraft: Draft = { title: '', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null };
+const emptyDraft: Draft = { title: '', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null, type: 'implementation' };
 const textFields = ['goal', 'acceptance', 'notes'] as const;
 const editableFields = ['title', ...textFields, 'agent', 'machineId'] as const;
 
 function draftFrom(task: Task): Draft {
-  return { title: task.title, goal: task.goal, acceptance: task.acceptance, notes: task.notes, agent: task.agent, machineId: task.machineId };
+  return { title: task.title, goal: task.goal, acceptance: task.acceptance, notes: task.notes, agent: task.agent, machineId: task.machineId, type: task.type };
 }
 
 interface FormProps {
@@ -84,6 +84,10 @@ export function TaskForm(props: FormProps) {
           const title = event.currentTarget.value;
           setDraft((value) => ({ ...value, title }));
         }} />
+        {!baseTask && <NativeSelect label={t.form.type} value={draft.type} onChange={(event) => {
+          const type = event.currentTarget.value as Draft['type'];
+          setDraft((value) => ({ ...value, type }));
+        }} data={[{ value: 'implementation', label: t.taskTypes.implementation }, { value: 'discussion', label: t.taskTypes.discussion }]} />}
         {textFields.map((field) => <Textarea key={field} label={t.form[field]} value={draft[field]}
           error={validate && !textSchema.safeParse(draft[field]).success ? t.form.invalid : undefined}
           onChange={(event) => { const text = event.currentTarget.value; setDraft((value) => ({ ...value, [field]: text })); }} />)}

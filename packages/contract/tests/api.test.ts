@@ -9,7 +9,7 @@ const token = `stm_${'A'.repeat(43)}`;
 const tokenHash = 'a'.repeat(64);
 const ok = { ok: true };
 const projectId = 'pi-steward';
-const taskContent = { title: '标题', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null };
+const taskContent = { title: '标题', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null, type: 'implementation' };
 const task = { ...taskContent, id, projectId, status: 'queued', reworkPending: false, position: 1, createdBy: 'user',
   version: 1, createdAt: 100, updatedAt: 200, waiting: null, needsVerification: false, needsResponse: false };
 const attempt = { id, taskId: id, machineId: id, machineName: 'Mac', agent: 'pi', kind: 'new', sessionId: tmuxSession,
@@ -39,7 +39,7 @@ const samples = {
   textSchema: ['', null], nonEmptyTextSchema: ['正文', '\n '], machineTokenSchema: [`stm_${'A'.repeat(43)}`, 'stm_short'],
   tmuxSessionSchema: [tmuxSession, 'another-session'], emptyRequestSchema: [{}, { extra: true }],
   okResponseSchema: [ok, { ok: false }], requestIdSchema: [request, { requestId: '' }],
-  titleSchema: [' 标题 ', ' '], attemptKindSchema: ['rework', 'resume'], attemptResultSchema: ['delivered', 'done'],
+  taskTypeSchema: ['discussion', 'chat'], titleSchema: [' 标题 ', ' '], attemptKindSchema: ['rework', 'resume'], attemptResultSchema: ['delivered', 'done'],
   waitingReasonSchema: ['previous_attempt_active', 'rework'], questionStatusSchema: ['open', 'unknown'], slotsSchema: [0, -1],
   taskContentSchema: [taskContent, { ...taskContent, machineId: '' }], taskSchema: [task, { ...task, needsVerification: 'yes' }],
   attemptSchema: [attempt, { ...attempt, leaseExpiresAt: null }], deliveryContentSchema: [deliveryContent, { ...deliveryContent, done: '完成' }],
@@ -58,7 +58,8 @@ const samples = {
     { ...request, sessionId: id, projectId, title: '待办', status: 'queued' }],
   managedUpdateTaskRequestSchema: [{ ...request, sessionId: id, version: 1, notes: '' },
     { ...request, sessionId: id, version: 1 }],
-  webTaskActionRequestSchema: [{}, { unexpected: 1 }], webAcceptRequestSchema: [{ deliveryId: id }, { deliveryId: 'invalid' }],
+  webTaskActionRequestSchema: [{}, { unexpected: 1 }], webEndDiscussionRequestSchema: [{ attemptId: id }, {}],
+  webAcceptRequestSchema: [{ deliveryId: id }, { deliveryId: 'invalid' }],
   webReworkRequestSchema: [{ deliveryId: id, feedback: '补充验证' }, { deliveryId: id, feedback: ' ' }],
   webMachineSchema: [machine, { ...machine, occupiedSlots: -1 }], webMachinesResponseSchema: [{ machines: [machine] }, [machine]],
   launcherHeartbeatRequestSchema: [heartbeat, { ...heartbeat, projects: [projectRegistration, projectRegistration] }],
@@ -69,6 +70,9 @@ const samples = {
   launcherExitedRequestSchema: [{ ...request, exitCode: null, endedAt: 100 }, { ...request, endedAt: 100, exitCode: '0' }],
   launcherStartedResponseSchema: [ok, {}], launcherExitedResponseSchema: [ok, {}],
   agentContextResponseSchema: [context, { ...context, decisions: [{ ...decision, confirmedByUser: false }] }],
+  agentControlResponseSchema: [{ type: 'discussion', discussionEndRequested: false, deliverySaved: false, waitId: null }, { type: 'discussion' }],
+  agentEndDiscussionRequestSchema: [request, { ...request, text: '禁止同步' }],
+  agentReplyRequestSchema: [{ ...request, waitId: id }, { ...request, waitId: id, text: '禁止同步' }],
   agentProgressRequestSchema: [{ ...request, text: '进展' }, { ...request, text: ' ' }], agentProgressResponseSchema: [ok, {}],
   agentCreateQuestionRequestSchema: [{ ...request, text: '问题', context: '' }, { ...request, text: '问题' }],
   agentCreateQuestionResponseSchema: [{ questionId: id }, { id }],

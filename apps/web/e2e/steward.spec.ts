@@ -4,6 +4,7 @@ import { createPairingResponseSchema, STEW_INSTALL_COMMAND, webTaskDetailRespons
 import { artifact, expect, projectId, projectName, test } from './platform-fixture';
 
 const title = '验证任务控制台交付流程';
+const discussionTitle = '确认讨论类型与结束讨论';
 
 async function signIn(page: Page, password: string) {
   await page.getByLabel('访问密码').fill(password);
@@ -11,14 +12,16 @@ async function signIn(page: Page, password: string) {
   await expect(page.getByLabel('访问密码')).toBeHidden();
 }
 
-async function createTask(page: Page) {
+async function createTask(page: Page, options: { title?: string; type?: string } = {}) {
+  const taskTitle = options.title ?? title;
   await page.getByRole('button', { name: '新建任务', exact: true }).filter({ visible: true }).click();
   const form = page.getByRole('dialog');
-  await form.getByLabel('任务标题').fill(title);
+  await form.getByLabel('任务标题').fill(taskTitle);
+  if (options.type) await form.getByLabel('类型').selectOption({ label: options.type });
   await form.getByLabel('目标', { exact: true }).fill('通过网页完成一轮交付');
   await form.getByLabel('验收要求').fill('可以保存并重新打开任务');
   await form.getByRole('button', { name: '创建任务' }).click();
-  await expect(page.getByRole('heading', { name: title })).toBeVisible();
+  await expect(page.getByRole('heading', { name: taskTitle })).toBeVisible();
   return new URL(page.url()).pathname;
 }
 
@@ -134,6 +137,49 @@ test('手机从配对深链登录，已使用的短码不再允许确认', async
   await expect(field).toBeFocused();
   await alert.getByRole('link', { name: '查看电脑' }).click();
   await expect(page.getByRole('heading', { name: '手机审批 Mac', exact: true })).toBeVisible();
+});
+
+test('讨论结束请求不重复，且不会挡住返修后新一轮的结束按钮', async ({ page, platform }) => {
+  test.setTimeout(45_000);
+  const { origin, password, api } = platform;
+  const questionText = '讨论中需要确认的显式问题';
+  await page.goto(origin);
+  await signIn(page, password);
+  await page.getByRole('main').getByRole('link', { name: new RegExp(projectName) }).click();
+  await createTask(page, { title: discussionTitle, type: '讨论' });
+  await expect(page.getByText('讨论', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '安排开始', exact: true }).click();
+  await expect(page.getByText('等待启动器领取', { exact: true })).toBeVisible();
+  const attempt = await api.claim();
+  if (!attempt) throw new Error('No discussion attempt claimed');
+  await api.started(attempt.id);
+  await api.question(attempt.id, questionText);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: discussionTitle })).toBeVisible();
+  await expect(page.getByRole('button', { name: '结束讨论', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '需要处理' })).toHaveCount(0);
+  const history = page.locator('details.fold').filter({ hasText: '讨论记录' });
+  await expect(history).not.toHaveAttribute('open', '');
+  await history.locator('summary').click();
+  await expect(history.getByText(questionText)).toBeVisible();
+  await page.getByRole('button', { name: '结束讨论', exact: true }).click();
+  await expect(page.getByText('已请求结束', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '结束讨论', exact: true })).toHaveCount(0);
+  const delivery = await api.deliver(attempt.id, '讨论交付');
+  await api.exited(attempt.id);
+  await expect(page.getByText('待验收', { exact: true }).first()).toBeVisible({ timeout: 12_000 });
+  const rework = await page.request.post(`${origin}/api/v1/web/tasks/${attempt.taskId}/rework`, {
+    headers: { Origin: origin }, data: { deliveryId: delivery.deliveryId, feedback: '继续讨论' },
+  });
+  expect(rework.ok()).toBe(true);
+  const next = await api.claim();
+  expect(next?.kind).toBe('rework');
+  await expect(page.getByRole('button', { name: '结束讨论', exact: true })).toBeVisible({ timeout: 12_000 });
+  await expect(page.getByText('已请求结束', { exact: true })).toHaveCount(0);
+  await page.getByRole('main').getByRole('link', { name: projectName, exact: true }).click();
+  const row = page.getByRole('link', { name: new RegExp(discussionTitle) });
+  await expect(row).toContainText('讨论');
+  await expect(row).not.toContainText('已请求结束');
 });
 
 test('生产静态资源和页面入口保持各自的响应', async ({ request, platform }) => {

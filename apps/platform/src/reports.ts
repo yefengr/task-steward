@@ -1,23 +1,53 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentContextResponse, AgentControlResponse, AgentDeliveryRequest, AgentDeliveryResponse } from '@pi-steward/contract';
+import type { AgentContextResponse, AgentControlResponse, AgentDeliveryRequest, AgentDeliveryResponse, AttemptWorkspace, Delivery } from '@pi-steward/contract';
 import { reject } from './errors.js';
 import type { Store } from './store.js';
 import { decisionViews, deliveryViews, questionViews, replyWait, requireTask } from './views.js';
 import type { AttemptRow } from './views.js';
 
 const ok = { ok: true } as const;
-const workspaceRequirements = [
-  'Follow the project rules and the scope authorized for this task.',
-  'For Git projects, use a dedicated branch and worktree by default. Preserve uncommitted work in the original checkout.',
-];
+const scopeRequirement = 'Follow the project rules and the scope authorized for this task.';
+const implementationWorkspaceRequirement = 'For Git implementation work that requires changes, use a dedicated branch and worktree by default. Preserve uncommitted work in the original checkout. Do not create a branch or worktree for read-only work.';
+
+type PreviousWorkspace = AgentContextResponse['workspace']['previous'];
+
+function previousWorkspace(store: Store, attempt: AttemptRow, latest: Delivery | undefined): PreviousWorkspace {
+  // 只检查最新交付，不能越过它回到更早的一轮返修。
+  const previous = latest?.review === 'rework' && latest.attemptId !== attempt.id
+    ? store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? AND id=?', attempt.task_id, latest.attemptId)
+    : undefined;
+  if (!previous) return attempt.kind === 'rework' ? null : undefined;
+
+  const sameMachine = previous.machine_id === attempt.machine_id;
+  const { confirmed_workspace_path: path, confirmed_git_kind: gitKind, confirmed_git_branch: gitBranch,
+    confirmed_session_id: sessionId, confirmed_session_file: sessionFile } = previous;
+  const workspace = sameMachine && path !== null && gitKind !== null && sessionId !== null && sessionFile !== null
+    ? { path, gitKind, gitBranch, sessionId, sessionFile } : null;
+  return { attemptId: previous.id, machineId: previous.machine_id, sameMachine, workspace };
+}
 
 export function agentContext(store: Store, attempt: AttemptRow): AgentContextResponse {
   const task = requireTask(store, attempt.task_id);
+  const deliveries = deliveryViews(store, task.id);
+  const requirements = [scopeRequirement];
+  const previous = task.type === 'implementation' ? previousWorkspace(store, attempt, deliveries.at(-1)) : undefined;
+  if (task.type === 'implementation') requirements.push(implementationWorkspaceRequirement);
   return { task: { id: task.id, projectId: task.project_id, type: task.type, title: task.title, goal: task.goal,
     acceptance: task.acceptance, notes: task.notes }, attempt: { id: attempt.id, kind: attempt.kind },
-  workspace: { path: attempt.workspace_path, requirements: workspaceRequirements }, deliveries: deliveryViews(store, task.id),
+  workspace: { path: attempt.workspace_path, requirements, ...(previous === undefined ? {} : { previous }) }, deliveries,
   decisions: decisionViews(store, task.id).filter((decision): decision is typeof decision & { confirmedByUser: true } => decision.confirmedByUser),
   questions: questionViews(store, task.id).filter((question): question is typeof question & { status: 'open' } => question.status === 'open') };
+}
+
+export function confirmWorkspace(store: Store, attempt: AttemptRow, workspace: AttemptWorkspace) {
+  const task = requireTask(store, attempt.task_id);
+  if (task.type !== 'implementation' || task.status !== 'running') {
+    reject('conflict', 'Only a running implementation can confirm its workspace');
+  }
+  store.run(`UPDATE attempts SET confirmed_workspace_path=?, confirmed_git_kind=?, confirmed_git_branch=?,
+    confirmed_session_id=?, confirmed_session_file=? WHERE id=?`,
+  workspace.path, workspace.gitKind, workspace.gitBranch, workspace.sessionId, workspace.sessionFile, attempt.id);
+  return ok;
 }
 
 export function agentControl(store: Store, attempt: AttemptRow): AgentControlResponse {

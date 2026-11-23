@@ -6,7 +6,7 @@ import { jsonInput, routeParam } from './app.js';
 import { requireMachineAuth } from './auth.js';
 import { reject } from './errors.js';
 import { claim, exited, heartbeat, started } from './execution.js';
-import { addDecision, addProgress, addQuestion, agentContext, agentControl, deliver, recordReply, updateQuestion } from './reports.js';
+import { addDecision, addProgress, addQuestion, agentContext, agentControl, confirmWorkspace, deliver, recordReply, updateQuestion } from './reports.js';
 import type { Store } from './store.js';
 import { requestDiscussionEnd } from './tasks.js';
 import { ownedAttempt, requireLiveAttempt } from './views.js';
@@ -73,6 +73,8 @@ export function mountMachineRoutes(store: Store, now: () => number) {
     });
     return context.json(response as object);
   };
+  api.post('/agent/workspace', agentWrite('workspace', c.agentWorkspaceRequestSchema, c.okResponseSchema,
+    (attempt, body) => confirmWorkspace(store, attempt, body.workspace)));
   api.post('/agent/progress', agentWrite('progress', c.agentProgressRequestSchema, c.agentProgressResponseSchema,
     (attempt, body, time) => addProgress(store, attempt, body.text, time)));
   api.post('/agent/questions', agentWrite('create_question', c.agentCreateQuestionRequestSchema, c.agentCreateQuestionResponseSchema,

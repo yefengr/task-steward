@@ -14,7 +14,7 @@ import { openStore, sha256, Store } from '../src/store.js';
 it('迁移空库并开启外键，重复打开保留版本和数据', () => {
   const store = openStore(':memory:');
   try {
-    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 3 });
+    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 4 });
     expect(store.get('PRAGMA foreign_keys')).toMatchObject({ foreign_keys: 1 });
     expect(store.get('PRAGMA busy_timeout')).toMatchObject({ timeout: 5000 });
     expect(() => store.run('INSERT INTO projects VALUES (?,?,?,?)', 'project', 'Project', 'missing', 100)).toThrow(/FOREIGN KEY/);
@@ -35,9 +35,37 @@ it('升级原有数据库时建立配对表并保留已有机器及凭据', asyn
     } finally { connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 3 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 4 });
       expect(upgraded.all('SELECT * FROM machine_pairings')).toEqual([]);
       expect(upgraded.get('SELECT name, token_hash FROM machines')).toEqual({ name: 'Existing Mac', token_hash: sha256(token) });
+    } finally { upgraded.connection.close(); }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+it('升级三版数据库保留领取目录和会话，旧尝试的实际现场为空', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-steward-workspace-migration-'));
+  const path = join(directory, 'steward.sqlite');
+  try {
+    const prior = new Store(new DatabaseSync(path));
+    try {
+      for (const file of ['0001-initial.sql', '0002-machine-pairing.sql', '0003-discussion-and-reply-waits.sql']) {
+        prior.connection.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), 'utf8'));
+      }
+      prior.connection.exec('PRAGMA user_version=3; PRAGMA foreign_keys=ON');
+      const machineId = addMachine(prior, 'Mac', newMachineToken(), 100);
+      prior.run("INSERT INTO projects (id, name, created_at) VALUES ('project','Project',100)");
+      prior.run(`INSERT INTO tasks (id, project_id, title, goal, acceptance, notes, agent, status, position, created_by, created_at, updated_at)
+        VALUES ('task','project','Task','','','','pi','running',1,'user',100,100)`);
+      prior.run(`INSERT INTO attempts (id, task_id, machine_id, agent, kind, session_id, workspace_path, claimed_at, lease_expires_at)
+        VALUES ('attempt','task',?,'pi','new','launcher-session','/work/registered',100,200)`, machineId);
+    } finally { prior.connection.close(); }
+    const upgraded = openStore(path);
+    try {
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 4 });
+      expect(upgraded.get('SELECT * FROM attempts WHERE id=?', 'attempt')).toMatchObject({
+        workspace_path: '/work/registered', session_id: 'launcher-session', confirmed_workspace_path: null,
+        confirmed_git_kind: null, confirmed_git_branch: null, confirmed_session_id: null, confirmed_session_file: null,
+      });
     } finally { upgraded.connection.close(); }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

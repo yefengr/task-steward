@@ -4,6 +4,16 @@ import { project, request, errorCode, useFixture, delivery } from './fixture.js'
 
 const setup = useFixture();
 const responseOf = async <T>(schema: { parse: (data: unknown) => T }, response: Response) => schema.parse(await response.json());
+const workspace: c.AttemptWorkspace = {
+  path: '/private/first/worktree', gitKind: 'linked', gitBranch: 'feature/local',
+  sessionId: 'actual-pi-session', sessionFile: '/private/first/pi/session.jsonl',
+};
+
+async function returnForRework(x: Awaited<ReturnType<typeof setup>>, taskId: string, attemptId: string) {
+  const { deliveryId } = await responseOf(c.agentDeliveryResponseSchema, await x.agent(attemptId, '/deliveries', request(delivery)));
+  expect((await x.exit(attemptId)).status).toBe(200);
+  expect((await x.action(taskId, 'rework', { deliveryId, feedback: '补充验收' })).status).toBe(200);
+}
 
 it('按显式、上次、单机选路，拒绝未登记项目和 Claude', async () => {
   const x = await setup();
@@ -104,3 +114,96 @@ it('幂等绑定操作、载荷、尝试和问题，保留七天', async () => {
   expect((await x.detail(task.id)).progress).toHaveLength(2);
   expect((await x.agent(a.id, '/deliveries', request(delivery))).status).toBe(200);
 });
+
+it('实际现场仅由所属机器的运行中实施尝试确认，可更新且重放不回滚', async () => {
+  const x = await setup();
+  await x.heartbeat(2);
+  const task = await x.create();
+  await x.action(task.id, 'schedule');
+  const a = await x.claimed();
+  const first = request({ workspace });
+  const updated = { ...workspace, path: '/private/updated/worktree' };
+  await errorCode(await x.send('/agent/workspace', first, { machine: x.otherToken, attempt: a.id }), 403, 'forbidden');
+  await errorCode(await x.agent(a.id, '/workspace', request({ workspace: { ...workspace, path: 'relative' } })), 400, 'invalid_request');
+  expect(await responseOf(c.okResponseSchema, await x.agent(a.id, '/workspace', first))).toEqual({ ok: true });
+  expect((await x.agent(a.id, '/workspace', request({ workspace: updated }))).status).toBe(200);
+  expect((await x.agent(a.id, '/workspace', first)).status).toBe(200);
+  await errorCode(await x.agent(a.id, '/workspace', { ...first, workspace: updated }), 409, 'conflict');
+  expect(x.store.get('SELECT * FROM attempts WHERE id=?', a.id)).toMatchObject({ workspace_path: project.path, session_id: a.sessionId,
+    confirmed_workspace_path: updated.path, confirmed_git_kind: updated.gitKind, confirmed_git_branch: updated.gitBranch,
+    confirmed_session_id: updated.sessionId, confirmed_session_file: updated.sessionFile });
+  const context = await responseOf(c.agentContextResponseSchema, await x.agent(a.id, '/context'));
+  expect(context.workspace.path).toBe(project.path);
+  expect(context.workspace).not.toHaveProperty('previous');
+  expect(context.workspace.requirements.join(' ')).toContain('Do not create a branch or worktree for read-only work.');
+  const web = await (await x.web(`/tasks/${task.id}`)).text();
+  for (const value of Object.values(updated)) expect(web).not.toContain(value);
+  expect((await x.detail(task.id)).events.map(({ kind }) => kind)).not.toContain('workspace');
+
+  expect((await x.agent(a.id, '/deliveries', request(delivery))).status).toBe(200);
+  await errorCode(await x.agent(a.id, '/workspace', request({ workspace })), 409, 'conflict');
+  expect((await x.agent(a.id, '/workspace', first)).status).toBe(200);
+  expect((await x.exit(a.id)).status).toBe(200);
+  await errorCode(await x.agent(a.id, '/workspace', request({ workspace })), 409, 'attempt_ended');
+  expect((await x.agent(a.id, '/workspace', first)).status).toBe(200);
+
+  const discussion = await x.create('讨论', { type: 'discussion' });
+  await x.action(discussion.id, 'schedule');
+  const b = await x.claimed();
+  await errorCode(await x.agent(b.id, '/workspace', request({ workspace })), 409, 'conflict');
+  const discussionContext = await responseOf(c.agentContextResponseSchema, await x.agent(b.id, '/context'));
+  expect(discussionContext.workspace).not.toHaveProperty('previous');
+  expect(discussionContext.workspace.requirements.join(' ')).not.toContain('worktree');
+});
+
+it('同机返修和中断后重排均指向被退回的交付，不使用中断尝试的现场', async () => {
+  const x = await setup();
+  await x.heartbeat();
+  const task = await x.create();
+  await x.action(task.id, 'schedule');
+  const a = await x.claimed();
+  const detached = { ...workspace, gitBranch: null };
+  expect((await x.agent(a.id, '/workspace', request({ workspace: detached }))).status).toBe(200);
+  await returnForRework(x, task.id, a.id);
+  const b = await x.claimed();
+  expect(b).toMatchObject({ kind: 'rework', sessionId: a.sessionId, restoreSession: true });
+  const previous = { attemptId: a.id, machineId: x.machineId, sameMachine: true, workspace: detached };
+  expect((await responseOf(c.agentContextResponseSchema, await x.agent(b.id, '/context'))).workspace.previous).toEqual(previous);
+  expect((await x.agent(b.id, '/workspace', request({ workspace: { ...workspace, path: '/interrupted/worktree' } }))).status).toBe(200);
+  expect((await x.exit(b.id)).status).toBe(200);
+  expect((await x.action(task.id, 'reschedule')).status).toBe(200);
+  const resumed = await x.claimed();
+  expect(resumed).toMatchObject({ kind: 'new', restoreSession: false });
+  expect((await responseOf(c.agentContextResponseSchema, await x.agent(resumed.id, '/context'))).workspace.previous).toEqual(previous);
+
+  expect((await x.agent(resumed.id, '/deliveries', request(delivery))).status).toBe(200);
+  expect((await responseOf(c.agentContextResponseSchema, await x.agent(resumed.id, '/context'))).workspace).not.toHaveProperty('previous');
+});
+
+it.each([{ sameMachine: true, recorded: false }, { sameMachine: false, recorded: true }])(
+  '没有可用本机现场时只返回尝试与机器归属：%j', async ({ sameMachine, recorded }) => {
+    const x = await setup();
+    const otherProject = { ...project, path: '/other/registered/project' };
+    await x.heartbeat();
+    await x.heartbeat(1, [otherProject], [], x.otherToken);
+    const task = await x.create('返修', { machineId: x.machineId });
+    await x.action(task.id, 'schedule');
+    const a = await x.claimed();
+    if (recorded) expect((await x.agent(a.id, '/workspace', request({ workspace }))).status).toBe(200);
+    await returnForRework(x, task.id, a.id);
+    if (!sameMachine) {
+      const { version } = (await x.detail(task.id)).task;
+      expect((await x.web(`/tasks/${task.id}`, { machineId: x.otherId, version }, 'PATCH')).status).toBe(200);
+    }
+    const machine = sameMachine ? x.token : x.otherToken;
+    const { attempt: b } = await responseOf(c.launcherClaimResponseSchema, await x.claim(request(), machine));
+    expect(b).toMatchObject({ kind: 'rework', restoreSession: sameMachine });
+    const context = (path: string, body?: object) => x.send(`/agent${path}`, body, { attempt: b!.id, machine });
+    const prior = await responseOf(c.agentContextResponseSchema, await context('/context'));
+    expect(prior.workspace).toMatchObject({ path: sameMachine ? project.path : otherProject.path });
+    expect(prior.workspace.previous).toEqual({ attemptId: a.id, machineId: x.machineId, sameMachine, workspace: null });
+    expect((await context('/deliveries', request(delivery))).status).toBe(200);
+    const delivered = await responseOf(c.agentContextResponseSchema, await context('/context'));
+    expect(delivered.workspace.previous).toBeNull();
+  },
+);

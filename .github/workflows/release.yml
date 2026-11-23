@@ -1,9 +1,14 @@
-name: Pack and publish Task Steward
+name: Pack and stage Task Steward
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      stage:
+        description: Submit the verified package to npm for 2FA approval (unchecked only verifies and packs)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -12,55 +17,39 @@ defaults:
   run:
     shell: bash
 
-concurrency:
-  group: steward-npm
-  cancel-in-progress: false
-
 jobs:
   preflight:
-    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       pack_required: ${{ steps.version.outputs.pack_required }}
+      version: ${{ steps.version.outputs.version }}
     steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo 'This workflow can only run on main.' >&2
+          exit 1
       - uses: actions/checkout@v7
-        if: github.event_name == 'push' && github.repository == 'yefengr/task-steward'
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - name: Check whether to build the macOS package
         id: version
         env:
-          CHECK_REGISTRY: ${{ github.event_name == 'push' && github.repository == 'yefengr/task-steward' }}
-        run: |
-          if [[ "$CHECK_REGISTRY" != 'true' ]]; then
-            echo 'pack_required=true' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          version=$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' apps/launcher/package.json)
-          registry=https://registry.npmjs.org
-          if ! status=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$registry/@yefengr%2fsteward/$version"); then
-            echo 'Could not reach the npm registry to check the version.' >&2
-            exit 1
-          fi
-          case "$status" in
-            200)
-              echo "@yefengr/steward@$version is already published. Running verification on Linux." >> "$GITHUB_STEP_SUMMARY"
-              echo 'pack_required=false' >> "$GITHUB_OUTPUT"
-              ;;
-            404) echo 'pack_required=true' >> "$GITHUB_OUTPUT" ;;
-            *) echo "Could not check the npm version (HTTP $status)." >&2; exit 1 ;;
-          esac
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: bash scripts/npm-release.sh preflight
 
   verify:
     needs: preflight
-    if: ${{ !cancelled() && (needs.preflight.result == 'failure' || needs.preflight.outputs.pack_required == 'false') }}
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (needs.preflight.result == 'failure' || needs.preflight.outputs.pack_required == 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
@@ -68,17 +57,22 @@ jobs:
       - uses: pnpm/action-setup@v6
       - name: Verify
         run: |
+          bash scripts/test-npm-release.sh
           pnpm install --frozen-lockfile
           pnpm verify
 
   pack:
     needs: preflight
-    if: needs.preflight.outputs.pack_required == 'true'
+    if: github.ref == 'refs/heads/main' && needs.preflight.outputs.pack_required == 'true'
     runs-on: macos-latest
     timeout-minutes: 15
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      sha256: ${{ steps.inspect.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
@@ -86,73 +80,52 @@ jobs:
       - uses: pnpm/action-setup@v6
       - name: Verify and pack
         run: |
+          bash scripts/test-npm-release.sh
           pnpm install --frozen-lockfile
           pnpm verify
           node scripts/pack-stew.mjs "$RUNNER_TEMP/steward-npm"
+      - name: Inspect the npm tarball
+        id: inspect
+        run: bash scripts/npm-release.sh inspect "$RUNNER_TEMP/steward-npm"
       - uses: actions/upload-artifact@v7
+        id: upload
         with:
-          name: steward-npm-package
+          name: steward-npm-package-${{ github.run_attempt }}
           path: ${{ runner.temp }}/steward-npm
           if-no-files-found: error
           retention-days: 3
 
-  publish:
-    if: github.event_name == 'push' && github.repository == 'yefengr/task-steward'
-    needs: pack
+  stage:
+    needs: [preflight, pack]
+    if: github.repository == 'yefengr/task-steward' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.stage))
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Do not let unrelated pushes cancel pending release runs.
+    concurrency:
+      group: steward-npm-stage-${{ needs.preflight.outputs.version }}
+      cancel-in-progress: false
     environment: npm-release
     permissions:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          # 使用支持 npm OIDC 发布的 Node 和 npm 版本。
+          # The bundled npm must support npm stage publish (>= 11.15.0).
           node-version: 24.22.3
+          package-manager-cache: false
       - uses: actions/download-artifact@v8
         with:
-          name: steward-npm-package
+          artifact-ids: ${{ needs.pack.outputs.artifact_id }}
+          merge-multiple: true
           path: ${{ runner.temp }}/steward-npm
-      - name: Publish new version to npm
-        shell: bash
-        run: |
-          shopt -s nullglob
-          bundles=("$RUNNER_TEMP"/steward-npm/yefengr-steward-*.tgz)
-          [[ ${#bundles[@]} == 1 ]]
-          bundle=${bundles[0]}
-          manifest=$(tar -xOzf "$bundle" package/package.json)
-          version=$(jq -er 'select(.name == "@yefengr/steward") | .version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' <<< "$manifest")
-          [[ "$(basename "$bundle")" == "yefengr-steward-$version.tgz" ]]
-          registry=https://registry.npmjs.org
-          status=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$registry/@yefengr%2fsteward/$version")
-          case "$status" in
-            200) echo "@yefengr/steward@$version is already published." >> "$GITHUB_STEP_SUMMARY"; exit 0 ;;
-            404) ;;
-            *) echo "Could not check the npm version (HTTP $status)." >&2; exit 1 ;;
-          esac
-          latest=$(curl -fsS --max-time 15 "$registry/@yefengr%2fsteward/latest" | jq -er '.version')
-          if ! jq -en --arg version "$version" --arg latest "$latest" '
-            def numbers: split(".") | map(tonumber);
-            ($version | numbers) > ($latest | numbers)
-          ' >/dev/null; then
-            echo "Version $version must be newer than npm latest ($latest)." >&2
-            exit 1
-          fi
-          publish_log=$(mktemp)
-          trap 'rm -f "$publish_log"' EXIT
-          if npm publish "$bundle" --access public --registry="$registry" --loglevel=verbose >"$publish_log" 2>&1; then
-            echo "@yefengr/steward@$version published to npm." >> "$GITHUB_STEP_SUMMARY"
-          else
-            # 只输出状态码，不公开身份交换请求、响应或调试日志。
-            awk '
-              /^npm http fetch POST [0-9][0-9][0-9] https:\/\/registry\.npmjs\.org\/-\/npm\/v1\/oidc\/token\/exchange\// {
-                print "npm identity exchange: HTTP " $5
-              }
-              /^npm error code [A-Z0-9_]+$/ { print "npm publish error: " $4 }
-            ' "$publish_log" >&2
-            if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
-              echo 'GitHub did not provide OIDC request credentials.' >&2
-            fi
-            exit 1
-          fi
+      - name: Submit the verified package to npm Staged Packages
+        env:
+          STAGE_REQUESTED: ${{ inputs.stage }}
+          STEWARD_NPM_HOLD_VERSION: ${{ vars.STEWARD_NPM_HOLD_VERSION }}
+          PACKAGE_SHA256: ${{ needs.pack.outputs.sha256 }}
+        run: bash scripts/npm-release.sh stage "$RUNNER_TEMP/steward-npm" "$PACKAGE_SHA256"

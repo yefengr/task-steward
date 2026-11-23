@@ -1,8 +1,8 @@
 # Task Steward 部署与 Mac 接入
 
-## 构建和配置
+## 本地试用或自托管
 
-从仓库根目录构建平台镜像。
+以下构建命令用于本地试用或独立自托管，不用于更新 Steward 的正式站点。自托管时，从仓库根目录构建镜像。
 
 ```sh
 docker build -f docker/platform.Dockerfile -t pi-steward-platform:local .
@@ -26,25 +26,41 @@ docker compose --env-file /path/to/private-env -f docker/compose.example.yml up 
 
 平台使用 `/data` 下的 SQLite 文件和 WAL。Compose 命名卷保留任务和会话。确认容器 `/health` 正常后，从 HTTPS 域名登录。首次启动会自动应用已有迁移。备份时，在同一 Compose 服务里执行 `node dist/admin.js backup /data/<新的快照文件>`，再把生成的快照复制到受控存储。恢复旧数据前先停服务，保留当前卷，使用快照建立新卷并验证健康检查及关键记录后再切换。
 
-## 从本机更新服务器
+## 平台生产部署
 
-从仓库根目录运行更新命令，将 `your-steward-host` 换成已配置的 SSH 别名。请先启动本机 Docker 服务，并确保 Git 工作区干净。
+网站和 API 随同一个 `linux/amd64` 镜像上线。[平台工作流](../.github/workflows/deploy.yml) 在相关改动推送到 `main` 后验证代码、构建镜像，并用隔离的 SQLite 快照验证迁移、`/health` 和 `/pair`。通过后，运行摘要列出完整源码 SHA、镜像 ID 和归档 SHA-256，**Artifacts** 保存镜像七天。需要只验证、不申请上线时，在 Actions 手动运行该工作流，选择 `main`，保持 `deploy` 未勾选。手动从其他分支运行会失败。
+
+首次上线前，在 GitHub 仓库 **Settings → Environments → production** 添加 required reviewers，关闭管理员绕过，并将部署分支限制为 `main`。启用 Prevent self-review 时，操作人和审批人必须不同。把 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、经核实的 `DEPLOY_KNOWN_HOSTS` 放在该环境的 Secrets 中，不放在仓库级 Secrets。非默认 SSH 端口通过该环境的 `DEPLOY_PORT` 变量配置。服务器沿用 `~/pi-steward` 的 Compose 布局，应用环境文件和数据库不交给 GitHub。
+
+准备通过后，在 Actions 核对摘要与镜像，再批准 `production`。审批配置缺失时不会连接生产。审批后下载本次构建的归档，不重新构建；已过期的归档或不再是远端 `main` 最新提交的候选需要重新准备。部署还要求线上提交是候选的祖先。服务器在部署锁内核对镜像身份和线上容器是否已更换，再备份数据库、用实际备份的副本验证迁移，最后切换 Compose 并检查本机和公网的 API、网页。已经运行同一镜像 ID 时只检查健康，不重复切换。
+
+### Actions 无法执行时
+
+应急部署也要经过人工上线批准。先核对官方仓库的 Actions 运行确实来自 `main`，且构建与隔离迁移预检已通过；从那次运行下载对应归档。在已更新至当前 `main` 的仓库运行：
 
 ```bash
-bash scripts/update-platform.sh your-steward-host
+gh run download <run-id> --repo yefengr/task-steward --name <steward-platform-image-...> --dir ./release-image
+bash scripts/update-platform.sh <SSH 别名> ./release-image <运行摘要中的完整源码SHA>
 ```
 
-脚本从当前 Git 提交构建 `linux/amd64` 镜像。重试时会复用本机带有相同提交标记的镜像，服务器已加载同一个镜像时会跳过上传。首次构建或依赖变化时可能需要几分钟，请让构建进程持续运行。脚本分别记录构建、传输和部署耗时。
+应急命令不会从本机源码构建，也不能部署旧候选。不要在 Actions 正在部署时并行执行。
 
-部署脚本适用于当前线上 Compose 布局。它备份数据库，用快照副本验证候选镜像，再更新服务并检查健康状态。脚本会打印 Compose 备份和数据库快照路径。数据库升级后，如需回退，先核对旧镜像支持的格式和升级后新增的数据，再选恢复方式。部署失败时保留已有数据和备份供核对。
+### 回滚与数据
 
-## npm 打包和发布
+记录部署日志中的 Compose 备份、SQLite 快照路径和前一镜像 ID。切换前预检失败时，原服务不变；切换后的健康检查失败时，不自动回滚。先确认库已迁移到哪一版，以及切换后有没有新写入。只有确认旧镜像能读取当前 schema 和数据时，才能考虑用原卷恢复旧镜像；否则先停止服务、保留当前卷，再从部署前快照建立新卷，核对关键记录和健康检查后再切换。恢复旧快照会缺少备份后的写入，须先决定如何保留或补回这些数据。不要把旧镜像直接启动在兼容性未知的生产卷上。
 
-[Pack and publish Task Steward](../.github/workflows/release.yml) 在默认分支收到推送后，先查询 npm 上是否已有该版本。已有版本在 Linux 上运行 `pnpm verify`。新版本在 macOS 上编译双架构原生组件、验证并打包，通过后由 GitHub OIDC 发布到 `latest`。npm 查询失败时，Linux 验证仍会运行，发布会跳过。
+## npm 待审发布
 
-发版时更新 [`apps/launcher/package.json`](../apps/launcher/package.json) 的 `version` 并推送到默认分支。需要安装包时，可以在默认分支手动运行该工作流。手动运行只验证和打包。在打包任务的 **Artifacts** 下载 `steward-npm-package`，解压后得到 `yefengr-steward-<版本>.tgz`。
+更新 [`apps/launcher/package.json`](../apps/launcher/package.json) 的 `version` 后合入 `main`。[npm 工作流](../.github/workflows/release.yml) 检查版本，只为变更且未公开的版本自动在 macOS 上验证、打双架构包，再经 GitHub OIDC 运行 `npm stage publish`。版本未变或已公开时不提交待审。需要重试时，在 Actions 手动选择 `main`：默认仅验证并打包；核对 npm 尚无待审版本后，勾选 `stage` 才提交。安装包可从本次运行的 `steward-npm-package-*` 产物下载。
 
-首次启用时，在 npm 为 `@yefengr/steward` 配置 Trusted Publisher，绑定 `yefengr/task-steward`、`release.yml` 和环境 `npm-release`，启用 `npm publish` 权限。
+在 npm 将 `@yefengr/steward` 的 Trusted Publisher 绑定到 `yefengr/task-steward`、`release.yml` 和 `npm-release` 环境，取消允许直接 `npm publish`，不向工作流提供 npm Token。待审包不会成为 `latest`。维护者在 npm 的 **Staged Packages** 核对包、版本和 Actions 摘要中的源码提交；平台与扩展联动时，先核对线上平台已兼容该包，再用 2FA 批准。批准后核对公开 registry 中的版本和 `latest`。
+
+### 首次对齐线上 0.2.1
+
+1. 在 npm 确认 Trusted Publisher 配置并取消直接发布授权；确认旧流程没有正在发布的任务。先合入新的工作流，暂不纳入 `a8470af`，也不要批准平台上线。
+2. 在维护者账户查 **Staged Packages**（也可用已认证的 `npm stage list @yefengr/steward`），再查公开 registry。公开 registry 返回 404 只能说明未公开，不能证明没有待审包。如果 `0.2.1` 已待审，或暂时无法确认，在 GitHub Actions 的仓库变量设 `STEWARD_NPM_HOLD_VERSION=0.2.1`；新工作流仍可验证和打包，但不会为该版本提交待审。若已有待审包，先核对它的来源和兼容性，不要重传或直接批准。
+3. 让 `main` 纳入线上 `a8470af`，并保留该提交 ID 在 `main` 历史中，不把它 squash 或 rebase 成另一个提交。只追平仓库时不批准平台部署；保留构建和隔离预检证据。下次上线前再核对实际线上容器和 `main` 的祖先关系。
+4. 手动运行取的是当时 `main` 上启动器清单里的版本。先确认它仍是要发的 `0.2.1`，并确认该版本既未待审也未公开，再解除版本暂停并勾选 `stage`；若已公开，流程会跳过。npm 的最终批准与平台上线分别操作。
 
 ## 登记 Mac
 

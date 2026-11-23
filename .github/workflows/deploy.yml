@@ -1,0 +1,127 @@
+name: Prepare and deploy Task Steward platform
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/platform/**'
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'docker/**'
+      - 'scripts/**platform*.sh'
+      - '.github/workflows/deploy.yml'
+      - '.node-version'
+      - '.npmrc'
+      - 'package.json'
+      - 'pnpm-*.yaml'
+      - 'tsconfig.base.json'
+      - 'eslint.config.*'
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Request production approval after preparing the image
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+    steps:
+      - name: Require main
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo 'Platform releases must run on main.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - uses: pnpm/action-setup@v6
+      - name: Verify
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm verify
+          bash scripts/test-platform-release.sh
+      - name: Build and run isolated SQLite migration preflight
+        run: |
+          bundle="$RUNNER_TEMP/steward-image"
+          bash scripts/platform-release.sh build "$bundle" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+          bash scripts/test-platform-migration.sh "$(jq -er '.image_id' "$bundle/release.json")"
+          {
+            printf '### Verified platform image\n\n'
+            jq -r 'to_entries[] | "- \(.key): `\(.value)`"' "$bundle/release.json"
+            printf '\nIsolated SQLite snapshot migration, API and web checks passed.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        id: artifact
+        with:
+          name: steward-platform-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/steward-image
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  production:
+    if: github.repository == 'yefengr/task-steward' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.deploy)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: steward-platform-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://steward.yefengr.cn
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify environment approval is configured
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/platform-release.sh require-policy
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/steward-image
+      - name: Deploy the verified image and check HTTPS
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+        run: |
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
+          [[ -n "$DEPLOY_SSH_KEY" && -n "$DEPLOY_KNOWN_HOSTS" ]]
+          umask 077
+          ssh_dir=$(mktemp -d "$RUNNER_TEMP/steward-ssh.XXXXXX")
+          trap 'rm -rf "$ssh_dir"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          unset DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS
+          bash scripts/platform-release.sh deploy "$RUNNER_TEMP/steward-image" "$GITHUB_SHA" \
+            ssh -i "$ssh_dir/key" -p "$DEPLOY_PORT" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=10 -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts" "$DEPLOY_USER@$DEPLOY_HOST"
+          curl --retry 3 -fsS --max-time 10 https://steward.yefengr.cn/health | jq -e '.ok == true'
+          curl -fsS --max-time 10 -o "$RUNNER_TEMP/steward-pair.html" https://steward.yefengr.cn/pair
+          grep -q 'Task Steward' "$RUNNER_TEMP/steward-pair.html"

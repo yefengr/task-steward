@@ -26,13 +26,29 @@ docker compose --env-file /path/to/private-env -f docker/compose.example.yml up 
 
 平台使用 `/data` 下的 SQLite 文件和 WAL。Compose 命名卷保留任务和会话。确认容器 `/health` 正常后，从 HTTPS 域名登录。首次启动会自动应用已有迁移。备份时，在同一 Compose 服务里执行 `node dist/admin.js backup /data/<新的快照文件>`，再把生成的快照复制到受控存储。恢复旧数据前先停服务，保留当前卷，使用快照建立新卷并验证健康检查及关键记录后再切换。
 
+## 合并前检查
+
+[PR 检查](../.github/workflows/ci.yml)对每个以 `main` 为目标的 Pull Request 运行 `pnpm verify` 和两个发布门禁测试，不访问部署凭据。首次启用时，先等 GitHub 出现 `verify` 检查结果，再在 `main` 的保护规则中要求通过 PR 合并、分支与 `main` 保持最新、`verify` 通过后才能合并。保护规则也应约束管理员，不允许强推或删除 `main`。选择 GitHub Actions 作为 `verify` 的检查来源。PR 可以修改它自己的工作流或测试，因此这类改动不能只看绿灯，还要审核实际跳过或新增了什么；有独立维护者时，为检查定义及脚本要求非作者审核。生产审批仍是合并后的独立操作，不设为 PR 必过项。
+
 ## 平台生产部署
 
-网站和 API 随同一个 `linux/amd64` 镜像上线。[平台工作流](../.github/workflows/deploy.yml) 在相关改动推送到 `main` 后验证代码、构建镜像，并用隔离的 SQLite 快照验证迁移、`/health` 和 `/pair`。通过后，运行摘要列出完整源码 SHA、镜像 ID 和归档 SHA-256，**Artifacts** 保存镜像七天。需要只验证、不申请上线时，在 Actions 手动运行该工作流，选择 `main`，保持 `deploy` 未勾选。手动从其他分支运行会失败。
+网站和 API 随同一个 `linux/amd64` 镜像上线。[平台工作流](../.github/workflows/deploy.yml)在相关改动推送到 `main` 后验证代码、构建镜像，并用隔离的 SQLite 快照验证迁移、`/health` 和 `/pair`。运行摘要分别列出源码 SHA、归档里的单平台镜像配置摘要、构建器报告的镜像 ID 和归档 SHA-256。构建器 ID 用于在同一构建环境运行迁移预检；服务器校验单平台镜像配置摘要，不与构建器 ID 比较。**Artifacts** 保存镜像七天。需要只验证、不申请上线时，在 Actions 手动运行该工作流，选择 `main`，保持 `deploy` 未勾选。手动从其他分支运行会失败。
 
 首次上线前，在 GitHub 仓库 **Settings → Environments → production** 添加 required reviewers，关闭管理员绕过，并将部署分支限制为 `main`。启用 Prevent self-review 时，操作人和审批人必须不同。把 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、经核实的 `DEPLOY_KNOWN_HOSTS` 放在该环境的 Secrets 中，不放在仓库级 Secrets。非默认 SSH 端口通过该环境的 `DEPLOY_PORT` 变量配置。服务器沿用 `~/pi-steward` 的 Compose 布局，应用环境文件和数据库不交给 GitHub。
 
-准备通过后，在 Actions 核对摘要与镜像，再批准 `production`。审批配置缺失时不会连接生产。审批后下载本次构建的归档，不重新构建；已过期的归档或不再是远端 `main` 最新提交的候选需要重新准备。部署还要求线上提交是候选的祖先。服务器在部署锁内核对镜像身份和线上容器是否已更换，再备份数据库、用实际备份的副本验证迁移，最后切换 Compose 并检查本机和公网的 API、网页。已经运行同一镜像 ID 时只检查健康，不重复切换。
+### 限制生产部署密钥
+
+切换到新工作流前，服务器管理员从已审查的版本把 `scripts/platform-deploy-ssh.sh`、`scripts/platform-image-archive.sh` 和 `scripts/deploy-platform.sh` 安装到 `/usr/local/libexec/steward/`。目录和脚本由 root 所有，部署账号可以读取和运行，但不能修改。这三个脚本有更新时，也要先更新服务器副本，再批准新候选。服务器沿用经典 Docker 镜像存储和现有 Compose 目录，需要 Bash、Docker、`docker-compose`、`flock`、`jq`、`gzip`、`tar` 和系统 SHA-256 工具。
+
+把部署公钥在该账号 `authorized_keys` 中的原条目替换为以下格式，确保同一公钥没有另一条无限制记录。固定命令使用受信的系统 PATH；对部署账号确认 `PermitUserEnvironment no`，`AcceptEnv` 不允许 `PATH`、`BASH_ENV`、`ENV` 或 `DOCKER_*` 等改变命令行为的变量。管理员另用自己的 SSH 密钥维护服务器。
+
+```text
+restrict,command="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/bash /usr/local/libexec/steward/platform-deploy-ssh.sh" ssh-ed25519 <部署公钥> steward-deploy
+```
+
+用这把密钥验证 `ssh -T <部署别名> status` 只返回线上镜像 ID 和源码 SHA，无命令登录被拒绝。该密钥只可查询状态、上传候选归档和调用固定部署入口，但仍然能部署镜像，应按生产凭据保护。旧工作流不会使用这组命令；切换后不要重用旧候选。先确认新入口可用，再批准来自新工作流的候选。
+
+准备通过后，在 Actions 核对摘要与镜像，再批准 `production`。审批配置缺失时不会连接生产。审批后上传本次构建的同一归档，不重新构建；上传前后都检查候选是否仍为远端 `main` 的最新提交，并要求线上提交是候选的祖先。服务器只暂存一份候选归档，归档上限为 512 MiB。归档校验通过后才加载镜像；在部署锁内复核加载后的镜像身份和线上容器是否已更换，再备份数据库、用实际备份的副本验证迁移，最后切换 Compose 并检查本机和公网的 API、网页。已经运行同一镜像 ID 时只检查健康，不重复切换。
 
 ### Actions 无法执行时
 
@@ -43,7 +59,7 @@ gh run download <run-id> --repo yefengr/task-steward --name <steward-platform-im
 bash scripts/update-platform.sh <SSH 别名> ./release-image <运行摘要中的完整源码SHA>
 ```
 
-应急命令不会从本机源码构建，也不能部署旧候选。不要在 Actions 正在部署时并行执行。
+SSH 别名应使用配置了固定部署入口的密钥。应急命令不会从本机源码构建，也不能部署旧候选。不要在 Actions 正在部署时并行执行。
 
 ### 回滚与数据
 

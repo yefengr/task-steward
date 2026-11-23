@@ -1,0 +1,28 @@
+name: Task Steward PR CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - uses: pnpm/action-setup@v6
+      - name: Verify project and release gates
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm verify
+          bash scripts/test-platform-release.sh
+          bash scripts/test-npm-release.sh

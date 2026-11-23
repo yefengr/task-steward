@@ -2,12 +2,30 @@ import { z } from 'zod';
 import { nonEmptyTextSchema, okResponseSchema, projectIdSchema, requestIdSchema, textSchema, uuidSchema } from './core.js';
 import { attemptKindSchema, decisionSchema, deliveryContentSchema, deliverySchema, questionSchema, taskContentSchema, taskTypeSchema } from './models.js';
 
+const absolutePath = z.string().max(4096).regex(/^\/[^\0]*$/u);
+const gitBranch = z.string().min(1).max(1024).regex(/^[^\0\r\n]+$/u);
+export const attemptWorkspaceSchema = z.strictObject({
+  path: absolutePath,
+  gitKind: z.enum(['non_git', 'primary', 'linked']),
+  gitBranch: gitBranch.nullable(),
+  sessionId: z.string().max(256).regex(/^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u),
+  sessionFile: absolutePath,
+}).refine(({ gitKind, gitBranch }) => gitKind !== 'non_git' || gitBranch === null);
+export type AttemptWorkspace = z.infer<typeof attemptWorkspaceSchema>;
+export const agentWorkspaceRequestSchema = requestIdSchema.extend({ workspace: attemptWorkspaceSchema });
+export type AgentWorkspaceRequest = z.infer<typeof agentWorkspaceRequestSchema>;
+
 export const agentContextResponseSchema = z.strictObject({
   task: taskContentSchema.pick({ title: true, goal: true, acceptance: true, notes: true }).extend({
     id: uuidSchema, projectId: projectIdSchema, type: taskTypeSchema.default('implementation'),
   }),
   attempt: z.strictObject({ id: uuidSchema, kind: attemptKindSchema }),
-  workspace: z.strictObject({ path: z.string(), requirements: z.array(nonEmptyTextSchema) }),
+  workspace: z.strictObject({
+    path: z.string(), requirements: z.array(nonEmptyTextSchema),
+    previous: z.strictObject({
+      attemptId: uuidSchema, machineId: uuidSchema, sameMachine: z.boolean(), workspace: attemptWorkspaceSchema.nullable(),
+    }).nullable().optional(),
+  }),
   decisions: z.array(decisionSchema.extend({ confirmedByUser: z.literal(true) })),
   deliveries: z.array(deliverySchema), questions: z.array(questionSchema.extend({ status: z.literal('open') })),
 });

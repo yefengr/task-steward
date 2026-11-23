@@ -28,6 +28,7 @@ const machine = { id, name: 'Mac', online: true, slots: 1, occupiedSlots: 0, las
 const claimed = { id, taskId: id, projectId, agent: 'pi', sessionId: tmuxSession, restoreSession: false, displayName: '标题', kind: 'new' };
 const projectRegistration = { id: projectId, name: project.name, path: '/work/项目' };
 const heartbeat = { ...request, launcherVersion: 'test', slots: 1, projects: [projectRegistration], attempts: [{ id, tmuxSession, running: true }] };
+const workspace = { path: '/work/linked', gitKind: 'linked', gitBranch: 'feature/test', sessionId: id, sessionFile: '/work/sessions/test.jsonl' };
 const context = { task: { id, projectId, title: task.title, goal: '', acceptance: '', notes: '' }, attempt: { id, kind: 'new' },
   workspace: { path: projectRegistration.path, requirements: ['按项目规范执行'] }, decisions: [decision], deliveries: [delivery], questions: [question] };
 
@@ -69,6 +70,8 @@ const samples = {
   launcherStartedRequestSchema: [{ ...request, tmuxSession, startedAt: 100 }, { ...request, tmuxSession }],
   launcherExitedRequestSchema: [{ ...request, exitCode: null, endedAt: 100 }, { ...request, endedAt: 100, exitCode: '0' }],
   launcherStartedResponseSchema: [ok, {}], launcherExitedResponseSchema: [ok, {}],
+  attemptWorkspaceSchema: [workspace, { ...workspace, sessionFile: 'relative.jsonl' }],
+  agentWorkspaceRequestSchema: [{ ...request, workspace }, { ...request, workspace: { ...workspace, machineId: id } }],
   agentContextResponseSchema: [context, { ...context, decisions: [{ ...decision, confirmedByUser: false }] }],
   agentControlResponseSchema: [{ type: 'discussion', discussionEndRequested: false, deliverySaved: false, waitId: null }, { type: 'discussion' }],
   agentEndDiscussionRequestSchema: [request, { ...request, text: '禁止同步' }],

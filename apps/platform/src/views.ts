@@ -1,5 +1,5 @@
 import { REPLY_REMINDER_DELAY_MS, MACHINE_ONLINE_WINDOW_MS, taskStatusSchema } from '@pi-steward/contract';
-import type { Agent, Attempt, Delivery, Task, TaskStatus, TaskType, WaitingReason, WebMachine, WebProject, WebTaskDetailResponse } from '@pi-steward/contract';
+import type { Agent, Attempt, AttemptWorkspace, Delivery, Task, TaskStatus, TaskType, WaitingReason, WebMachine, WebProject, WebTaskDetailResponse } from '@pi-steward/contract';
 import { reject } from './errors.js';
 import type { Store } from './store.js';
 
@@ -13,6 +13,8 @@ export interface AttemptRow {
   tmux_session: string | null; claimed_at: number; started_at: number | null; lease_expires_at: number;
   cancel_requested: number; discussion_end_requested_at: number | null; ended_at: number | null;
   exit_code: number | null; result: Attempt['result']; workspace_path: string;
+  confirmed_workspace_path: string | null; confirmed_git_kind: AttemptWorkspace['gitKind'] | null;
+  confirmed_git_branch: string | null; confirmed_session_id: string | null; confirmed_session_file: string | null;
 }
 interface MachineRow {
   id: string; name: string; revoked_at: number | null; slots: number; last_seen_at: number | null;

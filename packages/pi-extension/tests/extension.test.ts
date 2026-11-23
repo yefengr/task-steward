@@ -1,11 +1,13 @@
+import { execFileSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { DefaultResourceLoader, SessionManager } from '@earendil-works/pi-coding-agent';
+import type { ExtensionAPI, ExtensionToolContext } from '@earendil-works/pi-coding-agent';
 import { uuidSchema } from '@pi-steward/contract';
+import type { AgentContextResponse } from '@pi-steward/contract';
 import { afterEach, expect, it, vi } from 'vitest';
 import { registerSteward } from '../src/index.js';
 
@@ -14,7 +16,7 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: vi.fn(actual.homedir) };
 });
 
-const executionTools = ['steward_task', 'steward_progress', 'steward_ask', 'steward_question_update',
+const executionTools = ['steward_task', 'steward_record_workspace', 'steward_progress', 'steward_ask', 'steward_question_update',
   'steward_decision', 'steward_deliver', 'steward_finish'];
 const managementTools = ['steward_list_projects', 'steward_list_tasks', 'steward_get_task', 'steward_create_task', 'steward_update_task'];
 const directories: string[] = [];
@@ -31,17 +33,24 @@ afterEach(() => {
 const delivery = { summary: '结果', done: ['完成'], notCovered: [], verification: ['通过'], howTo: [], issues: [] };
 function mockTools(fetcher: typeof fetch, options: { attemptId?: string; config?: string } = {}) {
   const registerTool = vi.fn<ExtensionAPI['registerTool']>();
+  const on = vi.fn<ExtensionAPI['on']>();
   const shutdown = vi.fn();
-  registerSteward({ registerTool, on: vi.fn() } as unknown as ExtensionAPI, {
+  let session: SessionManager | undefined;
+  registerSteward({ registerTool, on, appendEntry: (type: string, data: unknown) => session?.appendCustomEntry(type, data) } as unknown as ExtensionAPI, {
     env: { STEWARD_ATTEMPT_ID: options.attemptId, STEWARD_CONFIG: options.config }, fetcher,
   });
   const sessionId = randomUUID();
-  return { registerTool, shutdown, sessionId, call: (name: string, args = {}, signal?: AbortSignal) => {
-    const tool = registerTool.mock.calls.map(([entry]) => entry).find((entry) => entry.name === name);
-    if (!tool) throw new Error('工具未注册');
-    const ctx = { shutdown, sessionManager: { getSessionId: () => sessionId } };
-    return tool.execute('test-call', args, signal, undefined, ctx as unknown as Parameters<typeof tool.execute>[4]);
-  } };
+  const context = () => ({ cwd: session?.getCwd(), shutdown, sessionManager: session ?? { getSessionId: () => sessionId },
+    isIdle: () => false }) as unknown as ExtensionToolContext;
+  return { registerTool, shutdown, sessionId, useSession: (value: SessionManager) => { session = value; },
+    async fire(name: string, event = {}) {
+      for (const [type, handler] of on.mock.calls) if (type === name) await handler({ type: name, ...event } as never, context());
+    }, call: (name: string, args = {}, signal?: AbortSignal) => {
+      const tool = registerTool.mock.calls.map(([entry]) => entry).find((entry) => entry.name === name);
+      if (!tool) throw new Error('工具未注册');
+      return tool.execute('test-call', args, signal, undefined, context());
+    },
+  };
 }
 function configFile(file = join(workspace(), 'config.json'), platformUrl = 'https://steward.example') {
   mkdirSync(dirname(file), { recursive: true });
@@ -85,6 +94,102 @@ it.each([false, true])('Pi 资源加载器从 settings.json 加载扩展，自�
   expect([...extensions.find((entry) => entry.path === extension)!.tools.keys()])
     .toEqual(automatic ? [...managementTools, ...executionTools] : managementTools);
 }, 10_000);
+
+function taskContext(path: string): AgentContextResponse {
+  return { task: { id: randomUUID(), projectId: 'test', title: '实现', type: 'implementation', goal: '', acceptance: '', notes: '' },
+    attempt: { id: randomUUID(), kind: 'new' }, workspace: { path, requirements: [] }, decisions: [], deliveries: [], questions: [] };
+}
+
+function savedSession(path: string, storage: string) {
+  const session = SessionManager.create(path, storage);
+  session.appendMessage({ role: 'user', content: 'fixture', timestamp: 1 });
+  return session;
+}
+
+it('仅任务启动会话注入执行规则，原生迁移与手动恢复保留来源但不继承执行权限', async () => {
+  const directory = workspace();
+  const storage = join(directory, 'sessions');
+  const original = savedSession(directory, storage);
+  const fetcher = vi.fn<typeof fetch>(async () => Response.json({ type: 'implementation', discussionEndRequested: false,
+    deliverySaved: false, waitId: null }));
+  const agent = mockTools(fetcher, { attemptId: randomUUID(), config: configFile() });
+  async function guidelines(target: typeof agent) {
+    const promptGuidelines: string[] = [];
+    await target.fire('before_agent_start', { systemPromptOptions: { promptGuidelines } });
+    return promptGuidelines.join('\n');
+  }
+  const manual = mockTools(vi.fn());
+  manual.useSession(original);
+  expect(await guidelines(manual)).toBe('');
+  agent.useSession(original);
+  await agent.fire('session_start', { reason: 'startup' });
+  const first = await guidelines(agent);
+  expect(first).toMatch(/任务台后台启动.*先调用 steward_task/u);
+  expect(first).toMatch(/只读任务不创建工作树.*明确确认后才可在主分支实施/u);
+  expect(first).not.toContain('worktree_create');
+  expect(await guidelines(agent)).toEqual(first); // 接回仍在运行的进程，不替换任务绑定。
+  await agent.fire('session_shutdown');
+  const target = SessionManager.forkFrom(original.getSessionFile()!, workspace(), storage);
+  agent.useSession(target);
+  await agent.fire('session_start', { reason: 'resume' });
+  expect(await guidelines(agent)).toEqual(first);
+  await agent.fire('session_shutdown');
+  manual.useSession(SessionManager.open(target.getSessionFile()!));
+  const historical = await guidelines(manual);
+  expect(historical).toContain('会话历史来源');
+  expect(historical).not.toContain('先调用 steward_task');
+  expect(manual.registerTool.mock.calls.map(([tool]) => tool.name)).toEqual(managementTools);
+});
+
+it('返修核对真实工作树、Git 分支与 Pi 会话，在目标会话保存当前现场', async () => {
+  const directory = realpathSync(workspace());
+  const root = join(directory, 'repo');
+  const linked = join(directory, 'linked');
+  mkdirSync(root);
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'pipe' });
+  git(root, 'init', '-b', 'main');
+  git(root, '-c', 'user.name=Steward', '-c', 'user.email=fixture@example.test', '-c', 'commit.gpgsign=false',
+    'commit', '--allow-empty', '-m', 'fixture');
+  git(root, 'worktree', 'add', '-b', 'feature/old', linked);
+  const storage = join(directory, 'sessions');
+  const original = savedSession(root, storage);
+  const target = SessionManager.forkFrom(original.getSessionFile()!, linked, storage);
+  const context = taskContext(root);
+  const fetcher = vi.fn<typeof fetch>(async (url) => Response.json(String(url).endsWith('/context') ? context : { ok: true }));
+  const agent = mockTools(fetcher, { attemptId: context.attempt.id, config: configFile() });
+  agent.useSession(original);
+  expect((await agent.call('steward_record_workspace')).details).toEqual({ code: 'task_context_required' });
+  await agent.call('steward_task');
+  agent.useSession(target);
+  const workspaceInfo = { path: linked, gitKind: 'linked' as const, gitBranch: 'feature/old',
+    sessionId: target.getSessionId(), sessionFile: target.getSessionFile()! };
+  expect((await agent.call('steward_record_workspace')).details).toEqual({ ok: true, workspace: workspaceInfo });
+  expect(JSON.parse(String(fetcher.mock.calls.at(-1)?.[1]?.body))).toEqual({ requestId: expect.any(String), workspace: workspaceInfo });
+  expect(workspaceInfo.sessionId).not.toBe(original.getSessionId());
+
+  context.attempt.kind = 'rework';
+  const prior = { attemptId: randomUUID(), machineId: randomUUID(), sameMachine: true, workspace: workspaceInfo };
+  context.workspace.previous = prior;
+  agent.useSession(original);
+  const status = async () => (await agent.call('steward_task')).details;
+  expect(await status()).toMatchObject({ reworkWorkspace: 'switch_required' });
+  agent.useSession(savedSession(linked, storage));
+  expect(await status()).toMatchObject({ reworkWorkspace: 'switch_required' });
+  agent.useSession(SessionManager.open(workspaceInfo.sessionFile));
+  expect(await status()).toMatchObject({ reworkWorkspace: 'confirmed' });
+  git(root, 'worktree', 'move', linked, join(directory, 'moved'));
+  expect(await status()).toMatchObject({ reworkWorkspace: 'unavailable' });
+  git(root, 'worktree', 'move', join(directory, 'moved'), linked);
+  git(linked, 'switch', '-c', 'unexpected');
+  expect(await status()).toMatchObject({ reworkWorkspace: 'mismatch' });
+  git(linked, 'switch', 'feature/old');
+  rmSync(workspaceInfo.sessionFile);
+  expect(await status()).toMatchObject({ reworkWorkspace: 'unavailable' });
+  context.workspace.previous = { ...prior, sameMachine: false, workspace: null };
+  expect(await status()).toMatchObject({ reworkWorkspace: 'different_machine' });
+  context.workspace.previous = null;
+  expect(await status()).toMatchObject({ reworkWorkspace: 'not_recorded' });
+});
 
 it('普通 Pi 使用配对令牌查、建、改任务，写入附带当前会话 ID', async () => {
   const task = { id: randomUUID(), projectId: 'steward', title: '待办', goal: '', acceptance: '', notes: '', agent: 'pi',

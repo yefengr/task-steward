@@ -6,6 +6,8 @@ import { registerAttemptControl } from './attempt-control.js';
 import { AgentError, agentClient, taskManagementClient, validatedBody } from './client.js';
 import type { ClientOptions } from './client.js';
 import { retryableWrites } from './retry-writes.js';
+import { registerTaskSession } from './task-session.js';
+import { checkReworkWorkspace, currentWorkspace } from './workspace.js';
 
 const text = () => Type.String({ maxLength: 100_000 });
 const lines = () => Type.Array(text());
@@ -28,6 +30,8 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
       code === 'helper_unavailable' ? '请重新安装 Steward。' :
       code === 'proxy_unsupported' ? '显式代理需要使用 Node 24.20.0 或更高版本运行 Pi。' :
       code === 'invalid_request' ? '请检查工具参数后重试。' :
+      code === 'task_context_required' ? '请先调用 steward_task 确认任务类型；只为实现任务记录工作现场。' :
+      code === 'workspace_unavailable' ? '无法核对当前目录、Git 或持久化 Pi 会话；请核对本机现场，必要时向用户确认。' :
       code === 'attempt_ended' ? '本次尝试已结束，请检查平台状态。' :
       code === 'conflict' ? '请核对平台状态。交付请求重试时请保留原参数。' :
       code === 'pending_writes_full' ? '待确认的请求已达上限，请先使用原参数重试已有请求。' :
@@ -93,20 +97,37 @@ function deliveryId(attemptId: string) {
 export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env: process.env }) {
   registerTaskManagement(pi, options);
   const attempt = c.uuidSchema.safeParse(options.env.STEWARD_ATTEMPT_ID);
+  registerTaskSession(pi, attempt.success);
   if (!attempt.success) return;
   const request = agentClient(attempt.data, options);
   const control = registerAttemptControl(pi, attempt.data, request);
   const write = retryableWrites();
   const requestId = deliveryId(attempt.data);
   let delivered = false;
+  let taskContext: c.AgentContextResponse | undefined;
 
   pi.registerTool({
-    name: 'steward_task', label: '读取 Steward 任务', description: '读取本次任务的目标、验收要求、决定、交付与返修反馈。',
+    name: 'steward_task', label: '读取 Steward 任务', description: '读取本次任务的目标、验收要求、决定、交付、返修反馈及工作现场核对结果。',
     parameters: Type.Object({}),
-    execute: (_id, _args, signal) => report(async () => {
+    execute: (_id, _args, signal, _update, ctx) => report(async () => {
+      taskContext = undefined;
       const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
       control.noteTaskType(data.task.type);
-      return data;
+      taskContext = data;
+      const reworkWorkspace = await checkReworkWorkspace(ctx, data);
+      return reworkWorkspace ? { ...data, reworkWorkspace } : data;
+    }),
+  });
+  pi.registerTool({
+    name: 'steward_record_workspace', label: '记录 Steward 工作现场',
+    description: '实现任务确认工作空间后，保存当前 Pi 会话的实际工作目录、Git 分支和会话定位。迁移或切换后在目标会话调用。',
+    parameters: Type.Object({}),
+    execute: (_id, _args, signal, _update, ctx) => report(async () => {
+      if (taskContext?.task.type !== 'implementation') throw new AgentError('task_context_required');
+      const workspace = await currentWorkspace(ctx, taskContext.workspace.path);
+      await write('POST', 'workspace', workspace, (requestId) => request('POST', 'workspace', c.okResponseSchema,
+        validatedBody(c.agentWorkspaceRequestSchema, { workspace, requestId }), signal));
+      return { ok: true, workspace };
     }),
   });
   pi.registerTool({

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 从个人服务器上的 Compose 目录运行，或由 CI 通过 SSH 将此脚本送入 bash。
+# 生产服务器预装，由受限 SSH 入口在验证归档后调用。
 set -euo pipefail
 umask 077
 

@@ -60,7 +60,7 @@ jobs:
         run: |
           bundle="$RUNNER_TEMP/steward-image"
           bash scripts/platform-release.sh build "$bundle" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
-          bash scripts/test-platform-migration.sh "$(jq -er '.image_id' "$bundle/release.json")"
+          bash scripts/test-platform-migration.sh "$(jq -er '.builder_image_id' "$bundle/release.json")"
           {
             printf '### Verified platform image\n\n'
             jq -r 'to_entries[] | "- \(.key): `\(.value)`"' "$bundle/release.json"

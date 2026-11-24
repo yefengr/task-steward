@@ -7,7 +7,7 @@ import type { z } from 'zod';
 import type { taskContentSchema } from '@pi-steward/contract';
 import { api, WebError } from '../lib/api';
 import { useI18n } from '../lib/i18n';
-import { useFloatingSafeMiddlewares } from '../lib/ui/safe-area';
+import { useFloatingSafeMiddlewares } from '@yefengr/pwa-foundation';
 import { ErrorNotice } from './common';
 
 type Draft = z.infer<typeof taskContentSchema>;

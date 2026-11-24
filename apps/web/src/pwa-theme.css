@@ -37,11 +37,6 @@
   --pwa-radius-xl: 16px;
   --pwa-duration-modal-in: 400ms;
   --pwa-duration-modal-out: 200ms;
-  --pwa-safe-top: env(safe-area-inset-top, 0px);
-  --pwa-safe-bottom: env(safe-area-inset-bottom, 0px);
-  --pwa-safe-left: env(safe-area-inset-left, 0px);
-  --pwa-safe-right: env(safe-area-inset-right, 0px);
-  --pwa-hit-target: 44px;
 }
 
 :root[data-mantine-color-scheme='dark'] {

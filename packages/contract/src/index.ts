@@ -6,3 +6,4 @@ export * from './agent.js';
 export * from './local-config.js';
 export * from './pairing.js';
 export * from './task-management.js';
+export * from './session-control.js';

@@ -46,7 +46,7 @@ export const projectId = 'steward-demo';
 export const projectName = 'Task Steward 任务控制台';
 const machineName = '测试 Mac';
 
-function platformApi(origin: string, token: string) {
+function platformApi(origin: string, token: string, directory: string) {
   async function post(path: string, data: object, attemptId?: string) {
     const response = await fetch(`${origin}/api/v1${path}`, { method: 'POST', headers: {
       Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(attemptId ? { 'X-Steward-Attempt-Id': attemptId } : {}),
@@ -55,9 +55,13 @@ function platformApi(origin: string, token: string) {
     return response.json() as Promise<unknown>;
   }
   return {
-    register: async (path: string) => c.launcherHeartbeatResponseSchema.parse(await post('/launcher/heartbeat',
-      c.launcherHeartbeatRequestSchema.parse({ requestId: randomUUID(), launcherVersion: 'smoke', slots: 2,
-        projects: [{ id: projectId, name: projectName, path }], attempts: [] }))),
+    register: async (sessionControl?: true) => c.launcherHeartbeatResponseSchema.parse(await post('/launcher/heartbeat',
+      c.launcherHeartbeatRequestSchema.parse({ requestId: randomUUID(), launcherVersion: 'smoke', slots: 2, sessionControl,
+        projects: [{ id: projectId, name: projectName, path: directory }], attempts: [] }))),
+    session: async (id: string, sessionId: string) => c.okResponseSchema.parse(await post('/agent/session', { requestId: randomUUID(),
+      locator: { path: directory, sessionId, sessionFile: join(directory, `${sessionId}.jsonl`) } }, id)),
+    sessionReport: async (id: string, report: Omit<c.LauncherSessionReport, 'requestId'> & { failure?: c.SessionOperationFailure }) =>
+      c.okResponseSchema.parse(await post(`/launcher/session-operations/${id}/report`, { requestId: randomUUID(), ...report })),
     claim: async () => c.launcherClaimResponseSchema.parse(await post('/launcher/claim', { requestId: randomUUID() })).attempt,
     started: async (id: string) => c.launcherStartedResponseSchema.parse(await post(`/launcher/attempts/${id}/started`,
       { requestId: randomUUID(), tmuxSession: `steward-${id}`, startedAt: Date.now() })),
@@ -92,8 +96,8 @@ export const test = base.extend<{ platform: Fixture }>({
       child.once('error', () => { stopped = true; });
       try {
         await waitForPlatform(origin, () => stopped);
-        const api = platformApi(origin, token);
-        await api.register(directory);
+        const api = platformApi(origin, token, directory);
+        await api.register();
         await use({ origin, password, api });
       } finally {
         if (!stopped) child.kill();

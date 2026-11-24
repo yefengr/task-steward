@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { LEASE_DURATION_MS } from '@pi-steward/contract';
 import type { LauncherClaimResponse, LauncherExitedRequest, LauncherHeartbeatRequest, LauncherHeartbeatResponse, LauncherStartedRequest } from '@pi-steward/contract';
 import { reject } from './errors.js';
+import { checkReplacementStart, expireSessionPermissions, launchPending, replacementExited, replacementStarted, sessionDirectives } from './session-control.js';
 import type { Store } from './store.js';
 import { executionMachineSql, isOnline, occupiedSlots, requireMachine, requireTask } from './views.js';
 import type { AttemptRow, TaskRow } from './views.js';
@@ -9,28 +10,32 @@ import type { AttemptRow, TaskRow } from './views.js';
 const tmuxTarget = (attemptId: string) => `steward-${attemptId}`;
 
 export function heartbeat(store: Store, machineId: string, input: LauncherHeartbeatRequest, now: number): LauncherHeartbeatResponse {
-  store.run('UPDATE machines SET last_seen_at=?, slots=?, launcher_version=? WHERE id=?', now, input.slots, input.launcherVersion, machineId);
+  store.run('UPDATE machines SET last_seen_at=?, slots=?, launcher_version=?, session_control=? WHERE id=?',
+    now, input.slots, input.launcherVersion, Number(input.sessionControl === true), machineId);
   store.run('DELETE FROM machine_projects WHERE machine_id=?', machineId);
   for (const project of input.projects) {
     store.run('INSERT INTO projects (id, name, created_at) VALUES (?,?,?) ON CONFLICT(id) DO NOTHING', project.id, project.name, now);
     store.run('INSERT INTO machine_projects VALUES (?,?,?,?)', machineId, project.id, project.path, now);
   }
+  expireSessionPermissions(store, machineId, now);
   const reported = new Map(input.attempts.map((attempt) => [attempt.id, attempt]));
   const active = store.all<AttemptRow>('SELECT * FROM attempts WHERE machine_id=? AND ended_at IS NULL ORDER BY claimed_at, rowid', machineId);
-  return { directives: active.map((attempt) => {
+  const directives = active.flatMap((attempt): LauncherHeartbeatResponse['directives'] => {
     const tmuxSession = tmuxTarget(attempt.id);
     const observation = reported.get(attempt.id);
     const matched = observation?.tmuxSession === tmuxSession;
     if (matched && observation.running && !attempt.cancel_requested) {
       store.run('UPDATE attempts SET lease_expires_at=? WHERE id=?', now + LEASE_DURATION_MS, attempt.id);
     }
-    return { attemptId: attempt.id, tmuxSession, action: attempt.cancel_requested ? 'cancel' : matched ? 'continue' : 'unknown' };
-  }) };
+    if (launchPending(store, attempt.id)) return [];
+    return [{ attemptId: attempt.id, tmuxSession, action: attempt.cancel_requested ? 'cancel' : matched ? 'continue' : 'unknown' }];
+  });
+  return { directives, ...(input.sessionControl === true ? { sessionOperations: sessionDirectives(store, machineId, now) } : {}) };
 }
 
 export function claim(store: Store, machineId: string, now: number): LauncherClaimResponse {
   const machine = requireMachine(store, machineId);
-  if (!isOnline(machine, now) || occupiedSlots(store, machineId) >= machine.slots) return { attempt: null };
+  if (!isOnline(machine, now) || occupiedSlots(store, machineId, now) >= machine.slots) return { attempt: null };
   const task = store.get<TaskRow & { local_path: string }>(`SELECT t.*, mp.local_path FROM tasks t
     JOIN projects p ON p.id=t.project_id JOIN machine_projects mp ON mp.project_id=t.project_id AND mp.machine_id=?
     WHERE t.status='queued' AND t.agent='pi' AND ${executionMachineSql}=mp.machine_id
@@ -57,6 +62,7 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
 export function started(store: Store, attempt: AttemptRow, input: LauncherStartedRequest, now: number) {
   if (input.tmuxSession !== tmuxTarget(attempt.id)) reject('invalid_request', 'Invalid tmux target for this attempt');
   if (attempt.ended_at !== null) reject('attempt_ended', 'Attempt has ended');
+  checkReplacementStart(store, attempt.id, now);
   if (attempt.started_at !== null && (attempt.started_at !== input.startedAt || attempt.tmux_session !== input.tmuxSession)) {
     reject('conflict', 'Attempt already has a start report');
   }
@@ -64,6 +70,7 @@ export function started(store: Store, attempt: AttemptRow, input: LauncherStarte
     store.run('UPDATE attempts SET tmux_session=?, started_at=?, lease_expires_at=? WHERE id=?',
       input.tmuxSession, input.startedAt, now + LEASE_DURATION_MS, attempt.id);
     store.event(attempt.task_id, 'launcher', attempt.id, 'started', { tmuxSession: input.tmuxSession, startedAt: input.startedAt }, now);
+    replacementStarted(store, attempt.id, now);
   }
   return { ok: true } as const;
 }
@@ -78,5 +85,6 @@ export function exited(store: Store, attempt: AttemptRow, input: LauncherExitedR
   if (interrupted) store.run("UPDATE tasks SET status='interrupted', version=version+1, updated_at=? WHERE id=?", now, task.id);
   store.event(task.id, 'launcher', attempt.id, 'exited', { result, exitCode: input.exitCode,
     ...(interrupted ? { from: 'running', to: 'interrupted' } : {}) }, now);
+  replacementExited(store, attempt.id, now);
   return { ok: true } as const;
 }

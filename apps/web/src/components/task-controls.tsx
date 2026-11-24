@@ -2,19 +2,21 @@ import { Button, Group, Modal, Stack, Textarea } from '@mantine/core';
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { nonEmptyTextSchema } from '@pi-steward/contract';
-import type { Delivery, Task } from '@pi-steward/contract';
+import type { Attempt, Delivery, Task, WebSessionOperation, WebSessionOperationRequest } from '@pi-steward/contract';
 import { api } from '../lib/api';
 import type { TaskAction } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { ErrorNotice } from './common';
 
-type Confirmation = { action: 'cancel' } | { action: 'accept' | 'rework'; delivery: Delivery };
+type Confirmation = { action: 'cancel' } | { action: 'accept' | 'rework'; delivery: Delivery } |
+  { action: 'restart' | 'restore'; request: WebSessionOperationRequest; machineName: string };
 const primaryActions: Partial<Record<Task['status'], TaskAction>> = {
   unscheduled: 'schedule', queued: 'unschedule', interrupted: 'reschedule',
 };
 
-export function TaskControls({ task, delivery, activeAttemptId, onEdit, onChanged }: {
-  task: Task; delivery?: Delivery; activeAttemptId?: string; onEdit: () => void; onChanged: () => void;
+export function TaskControls({ task, delivery, latestAttempt, sessionOperation, onEdit, onChanged }: {
+  task: Task; delivery?: Delivery; latestAttempt?: Attempt; sessionOperation?: WebSessionOperation;
+  onEdit: () => void; onChanged: () => void;
 }) {
   const { t } = useI18n();
   const [confirmation, setConfirmation] = useState<Confirmation>();
@@ -22,11 +24,23 @@ export function TaskControls({ task, delivery, activeAttemptId, onEdit, onChange
   const [busy, setBusy] = useState(false);
   const [ending, setEnding] = useState(false);
   const [endRequestedFor, setEndRequestedFor] = useState<string>();
+  const activeAttemptId = latestAttempt?.endedAt === null ? latestAttempt.id : undefined;
   const endRequested = activeAttemptId !== undefined && endRequestedFor === activeAttemptId;
   const closed = task.status === 'done' || task.status === 'cancelled';
   const primary = task.reworkPending && task.status === 'queued' ? undefined : primaryActions[task.status];
   const canEndDiscussion = task.type === 'discussion' && task.status === 'running' && Boolean(activeAttemptId)
     && !task.discussionEndRequested && !endRequested;
+  const pending = sessionOperation?.status === 'pending';
+  const sessionAction = task.agent === 'pi' && latestAttempt?.agent === 'pi' && !latestAttempt.cancelRequested
+    ? task.status === 'interrupted' && latestAttempt.endedAt !== null ? 'restore'
+      : task.status === 'running' && latestAttempt.endedAt === null && latestAttempt.startedAt !== null &&
+        !task.discussionEndRequested && !endRequested ? 'restart' : undefined
+    : undefined;
+  function confirmSessionAction() {
+    if (!latestAttempt || !sessionAction || pending) return;
+    setConfirmation({ action: sessionAction, machineName: latestAttempt.machineName,
+      request: { requestId: crypto.randomUUID(), attemptId: latestAttempt.id, mode: sessionAction } });
+  }
   async function execute(action: TaskAction) {
     setBusy(true);
     setError(undefined);
@@ -44,16 +58,20 @@ export function TaskControls({ task, delivery, activeAttemptId, onEdit, onChange
   }
   return <>
     {!closed && <div className="action-bar">
-      {primary && <Button loading={busy} variant={primary === 'unschedule' ? 'light' : 'filled'}
+      {sessionAction === 'restore' && !pending && <Button disabled={busy} onClick={confirmSessionAction}>{t.actions.restore}</Button>}
+      {primary && <Button loading={busy} disabled={pending} variant={primary === 'unschedule' || sessionAction === 'restore' ? 'light' : 'filled'}
         onClick={() => void execute(primary)}>{t.actions[primary]}</Button>}
-      {canEndDiscussion && <Button loading={ending} disabled={busy}
+      {canEndDiscussion && <Button loading={ending} disabled={busy || pending}
         onClick={() => void endDiscussion()}>{t.actions.endDiscussion}</Button>}
+      {sessionAction === 'restart' && !pending && <Button variant="light" disabled={busy || ending}
+        onClick={confirmSessionAction}>{t.actions.restart}</Button>}
       {task.status === 'review' && delivery?.review === null && <>
         <Button onClick={() => setConfirmation({ action: 'accept', delivery })}>{t.actions.accept} · v{delivery.version}</Button>
         <Button variant="light" onClick={() => setConfirmation({ action: 'rework', delivery })}>{t.actions.rework}</Button>
       </>}
       <Button variant="light" disabled={busy} onClick={onEdit}>{t.common.editTask}</Button>
-      <Button variant="light" color="red" disabled={busy} onClick={() => setConfirmation({ action: 'cancel' })}>{t.actions.cancel}</Button>
+      <Button variant="light" color="red" disabled={busy || ending || (pending && !sessionOperation.needsExitVerification)}
+        onClick={() => setConfirmation({ action: 'cancel' })}>{t.actions.cancel}</Button>
     </div>}
     <ErrorNotice error={error} />
     {confirmation && <ConfirmTaskAction taskId={task.id} confirmation={confirmation} onClose={() => setConfirmation(undefined)}
@@ -82,6 +100,7 @@ function ConfirmTaskAction({ taskId, confirmation, onClose, onChanged }: {
     setError(undefined);
     try {
       if (action === 'cancel') await api.action(taskId, action);
+      else if ('request' in confirmation) await api.sessionOperation(taskId, confirmation.request);
       else if (action === 'accept') await api.accept(taskId, confirmation.delivery.id);
       else await api.rework(taskId, confirmation.delivery.id, feedback);
       onClose();
@@ -94,14 +113,15 @@ function ConfirmTaskAction({ taskId, confirmation, onClose, onChanged }: {
     <form onSubmit={submit} noValidate>
       <Stack gap="sm">
         <p>{t.actions[`${action}Hint`]}</p>
-        {confirmation.action !== 'cancel' && <p className="user-text"><strong>v{confirmation.delivery.version} · </strong>{confirmation.delivery.summary}</p>}
+        {'delivery' in confirmation && <p className="user-text"><strong>v{confirmation.delivery.version} · </strong>{confirmation.delivery.summary}</p>}
+        {'machineName' in confirmation && <p className="user-text"><strong>{t.task.originalMachine} · </strong>{confirmation.machineName}</p>}
         {action === 'rework' && <Textarea data-autofocus label={t.form.feedback} required value={feedback}
           error={invalid ? feedback.trim() ? t.form.invalid : t.form.required : undefined}
           onChange={(event) => { setFeedback(event.currentTarget.value); setInvalid(false); }} />}
         <ErrorNotice error={error} />
         <Group justify="flex-end" className="dialog-actions">
           <Button variant="light" disabled={busy} onClick={onClose}>{t.common.dismiss}</Button>
-          <Button type="submit" color={action === 'cancel' ? 'red' : undefined} loading={busy}>{t.actions[action]}</Button>
+          <Button type="submit" color={action === 'cancel' || action === 'restart' ? 'red' : undefined} loading={busy}>{t.actions[action]}</Button>
         </Group>
       </Stack>
     </form>

@@ -7,6 +7,7 @@ import { requireMachineAuth } from './auth.js';
 import { reject } from './errors.js';
 import { claim, exited, heartbeat, started } from './execution.js';
 import { addDecision, addProgress, addQuestion, agentContext, agentControl, confirmWorkspace, deliver, recordReply, updateQuestion } from './reports.js';
+import { reportSessionOperation, requireNoPendingSessionOperation, saveAgentSession, sessionDirectives } from './session-control.js';
 import type { Store } from './store.js';
 import { requestDiscussionEnd } from './tasks.js';
 import { ownedAttempt, requireLiveAttempt } from './views.js';
@@ -22,27 +23,37 @@ export function mountMachineRoutes(store: Store, now: () => number) {
   const api = new Hono();
   const authenticate = (context: Context) => requireMachineAuth(store, context.req.header('Authorization'));
   const launcherWrite = <T extends { requestId: string }, R>(operation: string, input: z.ZodType<T>, output: z.ZodType<R>,
-    apply: (machineId: string, body: T, time: number, attempt: AttemptRow) => R, attemptScoped = false) => async (context: Context) => {
+    apply: (machineId: string, body: T, time: number, attempt: AttemptRow, target: string) => R,
+    scope?: 'attempt' | 'session', project?: (response: R, machineId: string, time: number) => R) => async (context: Context) => {
     authenticate(context);
     const body = await jsonInput(context, input);
-    const target = attemptScoped ? routeParam(context.req.param('id'), c.uuidSchema) : '';
+    const target = scope ? routeParam(context.req.param('id'), c.uuidSchema) : '';
     const response = store.immediate(() => {
       const machineId = authenticate(context);
-      const attempt = attemptScoped ? ownedAttempt(store, target, machineId) : undefined;
+      const attempt = scope === 'attempt' ? ownedAttempt(store, target, machineId) : undefined;
       const time = now();
-      return store.request({ machineId, actor: 'launcher', operation, target }, body, time,
-        () => output.parse(apply(machineId, body, time, attempt!)));
+      const saved = store.request({ machineId, actor: 'launcher', operation, target }, body, time,
+        () => output.parse(apply(machineId, body, time, attempt!, target)));
+      return project ? output.parse(project(saved, machineId, time)) : saved;
     });
     return context.json(response as object);
   };
   api.post('/launcher/heartbeat', launcherWrite('heartbeat', c.launcherHeartbeatRequestSchema, c.launcherHeartbeatResponseSchema,
-    (machineId, body, time) => heartbeat(store, machineId, body, time)));
+    (machineId, body, time) => heartbeat(store, machineId, body, time), undefined, (response, machineId, time) => {
+      if (!response.sessionOperations) return response;
+      // 幂等重放不延长相对权限，也不返回已完成或已转阶段的旧权限。
+      const issued = new Map(response.sessionOperations.map(({ id, step }) => [id, step]));
+      return { ...response, sessionOperations: sessionDirectives(store, machineId, time)
+        .filter(({ id, step }) => issued.get(id) === step) };
+    }));
   api.post('/launcher/claim', launcherWrite('claim', c.launcherClaimRequestSchema, c.launcherClaimResponseSchema,
     (machineId, _body, time) => claim(store, machineId, time)));
   api.post('/launcher/attempts/:id/started', launcherWrite('started', c.launcherStartedRequestSchema, c.launcherStartedResponseSchema,
-    (_machineId, body, time, attempt) => started(store, attempt, body, time), true));
+    (_machineId, body, time, attempt) => started(store, attempt, body, time), 'attempt'));
   api.post('/launcher/attempts/:id/exited', launcherWrite('exited', c.launcherExitedRequestSchema, c.launcherExitedResponseSchema,
-    (_machineId, body, time, attempt) => exited(store, attempt, body, time), true));
+    (_machineId, body, time, attempt) => exited(store, attempt, body, time), 'attempt'));
+  api.post('/launcher/session-operations/:id/report', launcherWrite('session_report', c.launcherSessionReportSchema, c.okResponseSchema,
+    (machineId, body, time, _attempt, target) => reportSessionOperation(store, machineId, target, body, time), 'session'));
 
   api.get('/agent/context', (context) => {
     const machineId = authenticate(context);
@@ -68,11 +79,14 @@ export function mountMachineRoutes(store: Store, now: () => number) {
       const time = now();
       return store.request({ machineId, actor: 'agent', operation, target: questionScoped ? `${attemptId}/${questionId}` : attemptId }, body, time, () => {
         requireLiveAttempt(store, attempt);
+        if (operation !== 'session') requireNoPendingSessionOperation(store, attempt.task_id, time);
         return output.parse(apply(attempt, body, time, questionId));
       });
     });
     return context.json(response as object);
   };
+  api.post('/agent/session', agentWrite('session', c.agentSessionRequestSchema, c.okResponseSchema,
+    (attempt, body, time) => saveAgentSession(store, attempt, body.locator, time)));
   api.post('/agent/workspace', agentWrite('workspace', c.agentWorkspaceRequestSchema, c.okResponseSchema,
     (attempt, body) => confirmWorkspace(store, attempt, body.workspace)));
   api.post('/agent/progress', agentWrite('progress', c.agentProgressRequestSchema, c.agentProgressResponseSchema,

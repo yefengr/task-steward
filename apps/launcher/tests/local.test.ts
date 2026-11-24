@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,6 +35,87 @@ it('tmux 使用参数数组、精确目标、显式 PATH，并只把处理后的
   await tmux.cancel(target);
   expect(run.mock.lastCall?.[1]).toContain(`=${target}`);
   expect(displayName('-@;')).toBe('Pi task');
+});
+
+it('恢复命令不携带新会话 ID、名称或消息；只使用原文件和显式恢复环境', async () => {
+  type Runner = NonNullable<Parameters<typeof tmuxClient>[1]['run']>;
+  const run = vi.fn().mockResolvedValue({ stdout: '123\n', stderr: '' });
+  const resume = { ...config, pi: { ...config.pi, extraArgs: ['--approve', '--model', 'vendor/model', '-e', '/mock/extension;'] } };
+  const tmux = tmuxClient(resume, { configPath: '/mock/config;', extensionPath: '/mock/steward', run: run as Runner, env: {} });
+  const id = randomUUID();
+  const locator = { path: '/mock/项目 #{};', sessionId: randomUUID(), sessionFile: '/mock/old session;' };
+  expect(await tmux.launchResume(targetFor(id), id, locator)).toBe(123);
+  expect(run.mock.lastCall?.[1]).toEqual(['-L', 'steward', '-u', '-f', '/dev/null', 'new-session', '-d', '-s', targetFor(id),
+    '-P', '-F', '#{pane_pid}', '-c', '/mock/项目 ##{};/.', '-e', `STEWARD_ATTEMPT_ID=${id}`, '-e', 'STEWARD_CONFIG=/mock/config\\;',
+    '-e', 'STEWARD_RESUME=1', '-e', 'PATH=/mock/node:/usr/bin', '--', resume.pi.command, '--approve', '--model', 'vendor/model',
+    '-e', '/mock/extension\\;', '-e', '/mock/steward', '--session', '/mock/old session\\;']);
+});
+
+it('只接受精确单 pane 的 PID', async () => {
+  type Runner = NonNullable<Parameters<typeof tmuxClient>[1]['run']>;
+  const target = targetFor(randomUUID());
+  const run = vi.fn().mockResolvedValueOnce({ stdout: `${target}-other\t123\n` })
+    .mockResolvedValueOnce({ stdout: `${target}\t123\n${target}\t456\n` })
+    .mockResolvedValueOnce({ stdout: `${target}\t123\n` });
+  const tmux = tmuxClient(config, { configPath: '/mock/config', extensionPath: '/mock/steward', run: run as Runner, env: {} });
+  expect(await tmux.panePid(target)).toBeUndefined();
+  expect(await tmux.panePid(target)).toBeUndefined();
+  expect(await tmux.panePid(target)).toBe(123);
+  expect(run.mock.lastCall?.[1]).toContain(`=${target}`);
+});
+
+it.skipIf(spawnSync('tmux', ['-V']).status !== 0)('独立 tmux socket 中验证假 Pi 的新目标 PID 与精确停止', async () => {
+  const path = home();
+  const command = join(path, 'fake-pi');
+  writeFileSync(command, '#!/bin/sh\nexec /bin/sleep 20\n', { mode: 0o700 });
+  const resume = { ...config, path: (process.env.PATH ?? '/usr/bin:/bin').split(':'), pi: { command, extraArgs: [] } };
+  const tmux = tmuxClient(resume, { socket: join(path, 'socket'), configPath: join(path, 'config'), extensionPath: join(path, 'extension') });
+  const id = randomUUID();
+  const target = targetFor(id);
+  try {
+    const pid = await tmux.launchResume(target, id, { path, sessionId: randomUUID(), sessionFile: join(path, 'test.jsonl') });
+    expect(await tmux.inspect(target)).toBe('present');
+    expect(await tmux.panePid(target)).toBe(pid);
+    expect(await tmux.hasResumeIdentity(id)).toBe(true);
+    expect(await tmux.hasResumeIdentity(randomUUID())).toBe(false);
+    expect(tmux.processStatus(pid)).toBe('alive');
+    await expect(tmux.launchResume(target, id, { path, sessionId: randomUUID(), sessionFile: join(path, 'test.jsonl') }))
+      .rejects.toMatchObject({ notStarted: true });
+    await tmux.cancel(target);
+    expect(await tmux.inspect(target)).toBe('absent');
+  } finally {
+    if (await tmux.inspect(target) === 'present') await tmux.cancel(target);
+  }
+});
+
+it('只能从精确 tmux 会话的环境确认恢复身份', async () => {
+  type Runner = NonNullable<Parameters<typeof tmuxClient>[1]['run']>;
+  const id = randomUUID();
+  const run = vi.fn().mockResolvedValueOnce({ stdout: `STEWARD_ATTEMPT_ID=${randomUUID()}\n` })
+    .mockResolvedValueOnce({ stdout: `STEWARD_ATTEMPT_ID=${id}\n` }).mockResolvedValueOnce({ stdout: '-STEWARD_RESUME\n' })
+    .mockResolvedValueOnce({ stdout: `STEWARD_ATTEMPT_ID=${id}\n` }).mockResolvedValueOnce({ stdout: 'STEWARD_RESUME=1\n' });
+  const tmux = tmuxClient(config, { configPath: '/mock/config', extensionPath: '/mock/steward', run: run as Runner, env: {} });
+  expect(await tmux.hasResumeIdentity(id)).toBe(false);
+  expect(await tmux.hasResumeIdentity(id)).toBe(false);
+  expect(await tmux.hasResumeIdentity(id)).toBe(true);
+  expect(run.mock.calls.map(([, args]) => args.slice(-4))).toEqual([
+    ['show-environment', '-t', `=${targetFor(id)}`, 'STEWARD_ATTEMPT_ID'],
+    ['show-environment', '-t', `=${targetFor(id)}`, 'STEWARD_ATTEMPT_ID'],
+    ['show-environment', '-t', `=${targetFor(id)}`, 'STEWARD_RESUME'],
+    ['show-environment', '-t', `=${targetFor(id)}`, 'STEWARD_ATTEMPT_ID'],
+    ['show-environment', '-t', `=${targetFor(id)}`, 'STEWARD_RESUME'],
+  ]);
+});
+
+it('超时或未知响应不能当成 tmux 拒绝启动', async () => {
+  type Runner = NonNullable<Parameters<typeof tmuxClient>[1]['run']>;
+  const target = randomUUID();
+  const run = vi.fn().mockRejectedValueOnce({ code: 1, killed: true, stderr: `duplicate session: ${targetFor(target)}` })
+    .mockRejectedValueOnce({ code: 1, stderr: 'unknown error' });
+  const tmux = tmuxClient(config, { configPath: '/mock/config', extensionPath: '/mock/steward', run: run as Runner, env: {} });
+  const locator = { path: '/mock/work', sessionId: randomUUID(), sessionFile: '/mock/session.jsonl' };
+  await expect(tmux.launchResume(targetFor(target), target, locator)).rejects.toMatchObject({ notStarted: false });
+  await expect(tmux.launchResume(targetFor(target), target, locator)).rejects.toMatchObject({ notStarted: false });
 });
 
 it('区分无 server、名称仅前缀匹配和 tmux 查询失败', async () => {
@@ -156,6 +238,33 @@ it('只把 M1 明确的已有开始记录响应识别为已保存，并隔离原
   const client = platformClient(config, fetcher);
   await expect(client.report(event)).rejects.toMatchObject({ code: 'conflict', startedAlreadySaved: true });
   await expect(client.report(event)).rejects.toMatchObject({ code: 'conflict', startedAlreadySaved: false, message: '平台请求失败（conflict）。' });
+});
+
+it('旧平台仅在 invalid_request 后用新请求 ID 降级，且忽略降级响应中的会话操作', async () => {
+  const request = { requestId: randomUUID(), launcherVersion: 'test', sessionControl: true as const, slots: 1, projects: [], attempts: [] };
+  const operation = { id: randomUUID(), step: 'future-unknown-operation' };
+  const fetcher = vi.fn<typeof fetch>()
+    .mockImplementationOnce(async () => Response.json({ error: { code: 'invalid_request', message: 'unknown key' } }, { status: 400 }))
+    .mockImplementationOnce(async () => Response.json({ directives: [], sessionOperations: [operation] }))
+    .mockImplementationOnce(async () => Response.json({ error: { code: 'unauthorized', message: 'credentials' } }, { status: 401 }));
+  const client = platformClient(config, fetcher);
+  await expect(client.heartbeat(request)).resolves.toEqual({ directives: [] });
+  const sent = fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+  expect(sent[0]).toEqual(request);
+  expect(sent[1]).toEqual({ launcherVersion: 'test', requestId: expect.any(String), slots: 1, projects: [], attempts: [] });
+  expect(sent[1].requestId).not.toBe(request.requestId);
+  await expect(client.heartbeat(request)).rejects.toMatchObject({ code: 'unauthorized' });
+  expect(fetcher).toHaveBeenCalledTimes(3);
+});
+
+it('会话操作报告使用机器客户端的固定端点与认证', async () => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ ok: true }));
+  const id = randomUUID();
+  const body = { requestId: randomUUID(), result: 'stopped', step: 'stop' } as const;
+  await expect(platformClient(config, fetcher).reportSession(id, body)).resolves.toEqual({ ok: true });
+  expect(fetcher).toHaveBeenCalledWith(`https://steward.example/api/v1/launcher/session-operations/${id}/report`, expect.objectContaining({
+    method: 'POST', body: JSON.stringify(body), headers: expect.objectContaining({ Authorization: `Bearer ${config.machineToken}` }),
+  }));
 });
 
 it('令牌修复后原客户端使用新的凭据续送', async () => {

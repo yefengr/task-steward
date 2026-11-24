@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { attemptWorkspaceSchema } from '@pi-steward/contract';
+import { attemptWorkspaceSchema, piSessionLocatorSchema } from '@pi-steward/contract';
 import type { AgentContextResponse, AttemptWorkspace } from '@pi-steward/contract';
 import { AgentError } from './client.js';
 
@@ -69,6 +69,27 @@ async function readHeader(path: string) {
   } finally { await file.close(); }
 }
 
+export async function currentSessionLocator(ctx: LocationContext, requireLoaded: boolean) {
+  const session = ctx.sessionManager.getSessionFile();
+  const sessionCwd = ctx.sessionManager.getCwd();
+  if (!session || !isAbsolute(session) || !isAbsolute(sessionCwd) || !isAbsolute(ctx.cwd)) return undefined;
+  const [path, cwd] = await Promise.all([realpath(ctx.cwd), realpath(sessionCwd)]);
+  if (path !== cwd) return undefined;
+  const sessionId = ctx.sessionManager.getSessionId();
+  const sessionFile = await realpath(session).catch(async (error: unknown) => {
+    if (requireLoaded || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    // Pi 可能尚未收到首条消息，因此这里只登记之后将写入的路径。
+    const parent = await realpath(dirname(session)).catch(() => dirname(session));
+    return join(parent, basename(session));
+  });
+  if (requireLoaded) {
+    const header = await readHeader(sessionFile);
+    if (header.id !== sessionId || header.path !== path || !ctx.sessionManager.getEntries().some((entry) =>
+      entry.type === 'message' && (entry.message.role === 'user' || entry.message.role === 'assistant'))) return undefined;
+  }
+  return piSessionLocatorSchema.parse({ path, sessionId, sessionFile });
+}
+
 export async function currentWorkspace(ctx: LocationContext, registeredPath: string): Promise<AttemptWorkspace> {
   try {
     const [path, registered] = await Promise.all([realpath(ctx.cwd), realpath(registeredPath)]);
@@ -85,7 +106,7 @@ export async function currentWorkspace(ctx: LocationContext, registeredPath: str
 }
 
 export async function checkReworkWorkspace(ctx: LocationContext, data: AgentContextResponse) {
-  if (data.task.type !== 'implementation') return undefined;
+  if (data.task.type !== 'implementation' || data.attempt.kind === 'resume') return undefined;
   const previous = data.workspace.previous;
   if (previous === undefined && data.attempt.kind !== 'rework' && data.deliveries.at(-1)?.review !== 'rework') return undefined;
   if (!previous) return 'not_recorded';

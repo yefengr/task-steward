@@ -8,6 +8,7 @@ import type { AttemptRow } from './views.js';
 const ok = { ok: true } as const;
 const scopeRequirement = 'Follow the project rules and the scope authorized for this task.';
 const implementationWorkspaceRequirement = 'For Git implementation work that requires changes, use a dedicated branch and worktree by default. Preserve uncommitted work in the original checkout. Do not create a branch or worktree for read-only work.';
+const resumeWorkspaceRequirement = 'This is the restored conversation, not a new assignment or rework. Continue in the restored working directory unless the user requests a change. Do not replay the previous instruction by default.';
 
 type PreviousWorkspace = AgentContextResponse['workspace']['previous'];
 
@@ -30,10 +31,12 @@ export function agentContext(store: Store, attempt: AttemptRow): AgentContextRes
   const task = requireTask(store, attempt.task_id);
   const deliveries = deliveryViews(store, task.id);
   const requirements = [scopeRequirement];
-  const previous = task.type === 'implementation' ? previousWorkspace(store, attempt, deliveries.at(-1)) : undefined;
-  if (task.type === 'implementation') requirements.push(implementationWorkspaceRequirement);
+  const resumed = attempt.resumed_from_attempt_id !== null;
+  const previous = task.type === 'implementation' && !resumed ? previousWorkspace(store, attempt, deliveries.at(-1)) : undefined;
+  if (resumed) requirements.push(resumeWorkspaceRequirement);
+  else if (task.type === 'implementation') requirements.push(implementationWorkspaceRequirement);
   return { task: { id: task.id, projectId: task.project_id, type: task.type, title: task.title, goal: task.goal,
-    acceptance: task.acceptance, notes: task.notes }, attempt: { id: attempt.id, kind: attempt.kind },
+    acceptance: task.acceptance, notes: task.notes }, attempt: { id: attempt.id, kind: resumed ? 'resume' : attempt.kind },
   workspace: { path: attempt.workspace_path, requirements, ...(previous === undefined ? {} : { previous }) }, deliveries,
   decisions: decisionViews(store, task.id).filter((decision): decision is typeof decision & { confirmedByUser: true } => decision.confirmedByUser),
   questions: questionViews(store, task.id).filter((question): question is typeof question & { status: 'open' } => question.status === 'open') };
@@ -45,8 +48,9 @@ export function confirmWorkspace(store: Store, attempt: AttemptRow, workspace: A
     reject('conflict', 'Only a running implementation can confirm its workspace');
   }
   store.run(`UPDATE attempts SET confirmed_workspace_path=?, confirmed_git_kind=?, confirmed_git_branch=?,
-    confirmed_session_id=?, confirmed_session_file=? WHERE id=?`,
-  workspace.path, workspace.gitKind, workspace.gitBranch, workspace.sessionId, workspace.sessionFile, attempt.id);
+    confirmed_session_id=?, confirmed_session_file=?, session_locator=? WHERE id=?`,
+  workspace.path, workspace.gitKind, workspace.gitBranch, workspace.sessionId, workspace.sessionFile,
+  JSON.stringify({ path: workspace.path, sessionId: workspace.sessionId, sessionFile: workspace.sessionFile }), attempt.id);
   return ok;
 }
 

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { TaskStatus, WebCreateTaskRequest, WebUpdateTaskRequest } from '@pi-steward/contract';
 import { reject } from './errors.js';
+import { requireNoPendingSessionOperation } from './session-control.js';
 import type { Store } from './store.js';
 import { activeAttempt, executionMachine, requireMachine, requireProject, requireTask, taskView } from './views.js';
 
@@ -24,6 +25,7 @@ export function createTask(store: Store, input: WebCreateTaskRequest, now: numbe
 
 export function requestDiscussionEnd(store: Store, taskId: string, attemptId: string, actor: 'user' | 'agent', now: number) {
   const task = requireTask(store, taskId);
+  requireNoPendingSessionOperation(store, taskId, now);
   const active = activeAttempt(store, taskId);
   if (task.type !== 'discussion' || active?.id !== attemptId || active.cancel_requested ||
       (task.status !== 'running' && (actor === 'user' || active.discussion_end_requested_at === null))) {
@@ -63,6 +65,7 @@ const nextStatus: Record<TaskAction, TaskStatus> = {
 export function taskAction(store: Store, id: string, action: TaskAction, now: number,
   review?: { deliveryId: string; feedback?: string }) {
   const task = requireTask(store, id);
+  requireNoPendingSessionOperation(store, id, now, action === 'cancel');
   if (!allowed[action].includes(task.status) || (action === 'unschedule' && task.rework_pending)) {
     reject('conflict', 'This action is not allowed for the current task state');
   }

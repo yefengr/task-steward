@@ -2,14 +2,12 @@ import { z } from 'zod';
 import { nonEmptyTextSchema, okResponseSchema, projectIdSchema, requestIdSchema, textSchema, uuidSchema } from './core.js';
 import { attemptKindSchema, decisionSchema, deliveryContentSchema, deliverySchema, questionSchema, taskContentSchema, taskTypeSchema } from './models.js';
 
-const absolutePath = z.string().max(4096).regex(/^\/[^\0]*$/u);
+import { piSessionLocatorSchema } from './session-control.js';
+
 const gitBranch = z.string().min(1).max(1024).regex(/^[^\0\r\n]+$/u);
-export const attemptWorkspaceSchema = z.strictObject({
-  path: absolutePath,
+export const attemptWorkspaceSchema = piSessionLocatorSchema.extend({
   gitKind: z.enum(['non_git', 'primary', 'linked']),
   gitBranch: gitBranch.nullable(),
-  sessionId: z.string().max(256).regex(/^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u),
-  sessionFile: absolutePath,
 }).refine(({ gitKind, gitBranch }) => gitKind !== 'non_git' || gitBranch === null);
 export type AttemptWorkspace = z.infer<typeof attemptWorkspaceSchema>;
 export const agentWorkspaceRequestSchema = requestIdSchema.extend({ workspace: attemptWorkspaceSchema });

@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import * as c from '@pi-steward/contract';
 import { platformFetch, PlatformTransportError } from '@pi-steward/platform-http';
 import type { z } from 'zod';
 import type { Event } from './state.js';
 
 const REQUEST_TIMEOUT_MS = 4_000;
+const legacyHeartbeatResponse = c.launcherHeartbeatResponseSchema.omit({ sessionOperations: true }).strip();
 
 export class PlatformError extends Error {
   constructor(readonly code: c.ErrorCode | PlatformTransportError['code'] | 'network_error', readonly startedAlreadySaved = false) {
@@ -44,7 +46,16 @@ export function platformClient(config: c.LocalConfig, fetcher?: typeof fetch, ge
   }
   return {
     claim: (requestId: string) => post('claim', { requestId }, c.launcherClaimResponseSchema),
-    heartbeat: (body: c.LauncherHeartbeatRequest) => post('heartbeat', body, c.launcherHeartbeatResponseSchema),
+    heartbeat: async (body: c.LauncherHeartbeatRequest) => {
+      if (!body.sessionControl) return post('heartbeat', body, legacyHeartbeatResponse);
+      try {
+        return await post('heartbeat', body, c.launcherHeartbeatResponseSchema);
+      } catch (error) {
+        if (!(error instanceof PlatformError) || error.code !== 'invalid_request') throw error;
+        return post('heartbeat', { ...body, sessionControl: undefined, requestId: randomUUID() }, legacyHeartbeatResponse);
+      }
+    },
+    reportSession: (id: string, body: c.LauncherSessionReport) => post(`session-operations/${id}/report`, body, c.okResponseSchema),
     report: (e: Event) => post(`attempts/${e.id}/${e.kind}`, e.body,
       e.kind === 'started' ? c.launcherStartedResponseSchema : c.launcherExitedResponseSchema, e.kind === 'started'),
   };

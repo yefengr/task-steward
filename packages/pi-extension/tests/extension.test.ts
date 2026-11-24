@@ -31,18 +31,20 @@ afterEach(() => {
 });
 
 const delivery = { summary: '结果', done: ['完成'], notCovered: [], verification: ['通过'], howTo: [], issues: [] };
-function mockTools(fetcher: typeof fetch, options: { attemptId?: string; config?: string } = {}) {
+function mockTools(fetcher: typeof fetch, options: { attemptId?: string; config?: string; resumed?: boolean } = {}) {
   const registerTool = vi.fn<ExtensionAPI['registerTool']>();
   const on = vi.fn<ExtensionAPI['on']>();
   const shutdown = vi.fn();
+  const sendMessage = vi.fn();
   let session: SessionManager | undefined;
-  registerSteward({ registerTool, on, appendEntry: (type: string, data: unknown) => session?.appendCustomEntry(type, data) } as unknown as ExtensionAPI, {
-    env: { STEWARD_ATTEMPT_ID: options.attemptId, STEWARD_CONFIG: options.config }, fetcher,
+  registerSteward({ registerTool, on, sendMessage,
+    appendEntry: (type: string, data: unknown) => session?.appendCustomEntry(type, data) } as unknown as ExtensionAPI, {
+    env: { STEWARD_ATTEMPT_ID: options.attemptId, STEWARD_CONFIG: options.config, STEWARD_RESUME: options.resumed ? '1' : undefined }, fetcher,
   });
   const sessionId = randomUUID();
   const context = () => ({ cwd: session?.getCwd(), shutdown, sessionManager: session ?? { getSessionId: () => sessionId },
     isIdle: () => false }) as unknown as ExtensionToolContext;
-  return { registerTool, shutdown, sessionId, useSession: (value: SessionManager) => { session = value; },
+  return { registerTool, shutdown, sendMessage, sessionId, useSession: (value: SessionManager) => { session = value; },
     async fire(name: string, event = {}) {
       for (const [type, handler] of on.mock.calls) if (type === name) await handler({ type: name, ...event } as never, context());
     }, call: (name: string, args = {}, signal?: AbortSignal) => {
@@ -139,6 +141,52 @@ it('仅任务启动会话注入执行规则，原生迁移与手动恢复保留�
   expect(historical).toContain('会话历史来源');
   expect(historical).not.toContain('先调用 steward_task');
   expect(manual.registerTool.mock.calls.map(([tool]) => tool.name)).toEqual(managementTools);
+});
+
+it('接续启动只确认已加载的原文件与执行编号，不发送用户消息', async () => {
+  const directory = realpathSync(workspace());
+  const storage = join(directory, 'sessions');
+  const source = savedSession(directory, storage);
+  const reopened = SessionManager.open(source.getSessionFile()!);
+  const attemptId = randomUUID();
+  const fetcher = vi.fn<typeof fetch>(async (url) => Response.json(String(url).endsWith('/session') ? { ok: true } :
+    { type: 'discussion', discussionEndRequested: false, deliverySaved: false, waitId: null }));
+  const agent = mockTools(fetcher, { attemptId, config: configFile(), resumed: true });
+  agent.useSession(reopened);
+  await agent.fire('session_start', { reason: 'startup' });
+  try {
+    await vi.waitFor(() => {
+      const call = fetcher.mock.calls.find(([url]) => String(url).endsWith('/agent/session'));
+      expect(call).toBeDefined();
+      expect(new Headers(call?.[1]?.headers).get('X-Steward-Attempt-Id')).toBe(attemptId);
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ requestId: expect.any(String),
+        locator: { path: directory, sessionId: source.getSessionId(), sessionFile: source.getSessionFile() } });
+    });
+    expect(agent.sendMessage).not.toHaveBeenCalled();
+    expect(reopened.getEntries().filter(({ type }) => type === 'message')).toHaveLength(1);
+  } finally { await agent.fire('session_shutdown'); }
+});
+
+it('普通任务可登记预期会话文件，但接续启动不确认空白会话', async () => {
+  const directory = realpathSync(workspace());
+  const session = SessionManager.create(directory, join(directory, 'sessions'));
+  const fetcher = vi.fn<typeof fetch>(async (url) => Response.json(String(url).endsWith('/session') ? { ok: true } :
+    { type: 'implementation', discussionEndRequested: false, deliverySaved: false, waitId: null }));
+  const config = configFile();
+  const fresh = mockTools(fetcher, { attemptId: randomUUID(), config });
+  const resumed = mockTools(fetcher, { attemptId: randomUUID(), config, resumed: true });
+  const sessionCalls = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith('/agent/session'));
+  fresh.useSession(session);
+  resumed.useSession(session);
+  try {
+    await fresh.fire('session_start', { reason: 'startup' });
+    await vi.waitFor(() => expect(sessionCalls()).toHaveLength(1));
+    expect(JSON.parse(String(sessionCalls()[0]?.[1]?.body))).toMatchObject({ locator: { sessionFile: session.getSessionFile() } });
+    await resumed.fire('session_start', { reason: 'startup' });
+    await expect(import('../src/workspace.js').then(({ currentSessionLocator }) =>
+      currentSessionLocator({ cwd: directory, sessionManager: session }, true))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(sessionCalls()).toHaveLength(1);
+  } finally { await fresh.fire('session_shutdown'); await resumed.fire('session_shutdown'); }
 });
 
 it('返修核对真实工作树、Git 分支与 Pi 会话，在目标会话保存当前现场', async () => {

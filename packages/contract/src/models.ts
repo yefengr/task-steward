@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { agentSchema, nonEmptyTextSchema, projectIdSchema, taskStatusSchema, textSchema, timestampSchema, tmuxSessionSchema, uuidSchema } from './core.js';
+import { piSessionIdSchema } from './session-control.js';
 
 export const titleSchema = z.string().trim().min(1).max(500);
 export const taskTypeSchema = z.enum(['discussion', 'implementation']);
 export type TaskType = z.infer<typeof taskTypeSchema>;
-export const attemptKindSchema = z.enum(['new', 'rework']);
+export const attemptKindSchema = z.enum(['new', 'rework', 'resume']);
 export const attemptResultSchema = z.enum(['delivered', 'interrupted', 'cancelled']);
 export const waitingReasonSchema = z.enum([
   'previous_attempt_active', 'machine_unassigned', 'machine_project_unregistered', 'machine_offline', 'slots_full',
@@ -24,7 +25,7 @@ export const taskSchema = taskContentSchema.extend({
 });
 export const attemptSchema = z.strictObject({
   id: uuidSchema, taskId: uuidSchema, machineId: uuidSchema, machineName: z.string(), agent: agentSchema,
-  kind: attemptKindSchema, sessionId: tmuxSessionSchema, tmuxSession: tmuxSessionSchema.nullable(),
+  kind: attemptKindSchema, sessionId: piSessionIdSchema, tmuxSession: tmuxSessionSchema.nullable(),
   claimedAt: timestampSchema, startedAt: timestampSchema.nullable(), leaseExpiresAt: timestampSchema,
   cancelRequested: z.boolean(), endedAt: timestampSchema.nullable(),
   exitCode: z.int().nullable(), result: attemptResultSchema.nullable(), needsVerification: z.boolean(),

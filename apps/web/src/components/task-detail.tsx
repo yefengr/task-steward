@@ -11,13 +11,21 @@ import { DateTime, Deliveries, DiscussionHistory, Records } from './task-records
 
 function Attention({ detail }: { detail: WebTaskDetailResponse }) {
   const { t } = useI18n();
-  const { task } = detail;
+  const { task, sessionOperation } = detail;
   const latest = detail.deliveries.at(-1);
-  if (!task.needsVerification && task.status !== 'review' && task.status !== 'interrupted') return null;
+  const pending = sessionOperation?.status === 'pending';
+  const resumed = sessionOperation?.status === 'succeeded' && task.status === 'running';
+  const failure = sessionOperation?.status === 'failed' ? sessionOperation.failure : null;
+  if (!pending && !resumed && !failure && !task.needsVerification && task.status !== 'review' && task.status !== 'interrupted') return null;
   return <section className="detail-section">
     <h2>{t.task.attention}</h2>
-    {task.needsVerification && <p className="callout warning">{t.task.verificationHint}</p>}
-    {task.status === 'interrupted' && <p className="callout warning">{t.task.interruptedHint}</p>}
+    {pending && <p role="status" className={`callout${sessionOperation.needsExitVerification ? ' warning' : ''}`}>
+      {sessionOperation.needsExitVerification ? t.session.verifyingExit : t.session.pending[sessionOperation.mode]}</p>}
+    {resumed && <p role="status" className="callout">{t.session.ready}</p>}
+    {failure && <p role="alert" className="callout warning">{t.session.failures[failure]}</p>}
+    {task.needsVerification && !pending && <p className="callout warning">{t.task.verificationHint}</p>}
+    {task.status === 'interrupted' && !pending && <p className="callout warning">
+      {task.agent === 'pi' && detail.attempts.at(-1)?.agent === 'pi' ? t.session.interrupted : t.task.interruptedHint}</p>}
     {task.status === 'review' && latest && <div className="callout"><strong>{t.statuses.review} · v{latest.version}</strong>
       <p className="user-text">{latest.summary}</p></div>}
   </section>;
@@ -54,7 +62,6 @@ export default function TaskDetail({ detail, project, machines, onChanged }: {
   const { task, attempts } = detail;
   const [editing, setEditing] = useState<typeof task>();
   const lastAttempt = attempts.at(-1);
-  const activeAttempt = attempts.find((attempt) => attempt.endedAt === null);
   const assigned = machines.find((machine) => machine.id === task.machineId);
   const projectName = project?.name ?? task.projectId;
   const machineName = lastAttempt?.endedAt === null ? lastAttempt.machineName : assigned?.name ?? lastAttempt?.machineName ?? t.form.auto;
@@ -68,7 +75,7 @@ export default function TaskDetail({ detail, project, machines, onChanged }: {
         <span>{t.form.machine} · {machineName}</span>
         {task.createdBy === 'agent' && <span>{t.task.createdByAgent}</span>}
       </div>
-      <TaskControls task={task} delivery={detail.deliveries.at(-1)} activeAttemptId={activeAttempt?.id}
+      <TaskControls task={task} delivery={detail.deliveries.at(-1)} latestAttempt={lastAttempt} sessionOperation={detail.sessionOperation}
         onEdit={() => setEditing(task)} onChanged={onChanged} />
       {task.status === 'queued' && <div className="waiting-banner"><WaitReason task={task} />
         {task.reworkPending && <span className="chip">{t.task.reworkPending}</span>}</div>}

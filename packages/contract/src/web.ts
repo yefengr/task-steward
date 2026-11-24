@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { emptyRequestSchema, nonEmptyTextSchema, okResponseSchema, projectIdSchema, taskStatusSchema, timestampSchema, uuidSchema } from './core.js';
 import { attemptSchema, decisionSchema, deliverySchema, progressSchema, questionSchema, slotsSchema, taskContentSchema, taskEventSchema, taskSchema } from './models.js';
+import { webSessionOperationSchema } from './session-control.js';
 
 export const webLoginRequestSchema = z.strictObject({ password: z.string().min(1).max(1024) });
 export const webLoginResponseSchema = okResponseSchema;
@@ -16,7 +17,7 @@ export const webProjectTasksResponseSchema = z.strictObject({ tasks: z.array(tas
 export const webTaskDetailResponseSchema = z.strictObject({
   task: taskSchema, decisions: z.array(decisionSchema), progress: z.array(progressSchema),
   questions: z.array(questionSchema), deliveries: z.array(deliverySchema), attempts: z.array(attemptSchema),
-  events: z.array(taskEventSchema),
+  events: z.array(taskEventSchema), sessionOperation: webSessionOperationSchema.optional(),
 });
 export const webCreateTaskRequestSchema = taskContentSchema.partial().required({ title: true }).extend({
   projectId: projectIdSchema,

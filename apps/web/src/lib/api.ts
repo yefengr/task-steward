@@ -59,4 +59,6 @@ export const api = {
   accept: (id: string, deliveryId: string) => write('POST', `${taskApi(id)}/accept`, c.webAcceptRequestSchema, { deliveryId }, c.webTaskMutationResponseSchema),
   rework: (id: string, deliveryId: string, feedback: string) => write('POST', `${taskApi(id)}/rework`, c.webReworkRequestSchema, { deliveryId, feedback }, c.webTaskMutationResponseSchema),
   endDiscussion: (id: string, attemptId: string) => write('POST', `${taskApi(id)}/end-discussion`, c.webEndDiscussionRequestSchema, { attemptId }, c.webTaskMutationResponseSchema),
+  sessionOperation: (id: string, input: c.WebSessionOperationRequest) => write('POST', `${taskApi(id)}/session-operation`,
+    c.webSessionOperationRequestSchema, input, c.okResponseSchema),
 };

@@ -14,7 +14,7 @@ import { openStore, sha256, Store } from '../src/store.js';
 it('迁移空库并开启外键，重复打开保留版本和数据', () => {
   const store = openStore(':memory:');
   try {
-    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 4 });
+    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 5 });
     expect(store.get('PRAGMA foreign_keys')).toMatchObject({ foreign_keys: 1 });
     expect(store.get('PRAGMA busy_timeout')).toMatchObject({ timeout: 5000 });
     expect(() => store.run('INSERT INTO projects VALUES (?,?,?,?)', 'project', 'Project', 'missing', 100)).toThrow(/FOREIGN KEY/);
@@ -35,7 +35,7 @@ it('升级原有数据库时建立配对表并保留已有机器及凭据', asyn
     } finally { connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 4 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 5 });
       expect(upgraded.all('SELECT * FROM machine_pairings')).toEqual([]);
       expect(upgraded.get('SELECT name, token_hash FROM machines')).toEqual({ name: 'Existing Mac', token_hash: sha256(token) });
     } finally { upgraded.connection.close(); }
@@ -61,10 +61,11 @@ it('升级三版数据库保留领取目录和会话，旧尝试的实际现场�
     } finally { prior.connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 4 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 5 });
       expect(upgraded.get('SELECT * FROM attempts WHERE id=?', 'attempt')).toMatchObject({
         workspace_path: '/work/registered', session_id: 'launcher-session', confirmed_workspace_path: null,
         confirmed_git_kind: null, confirmed_git_branch: null, confirmed_session_id: null, confirmed_session_file: null,
+        session_locator: null, resumed_from_attempt_id: null,
       });
     } finally { upgraded.connection.close(); }
   } finally { await rm(directory, { recursive: true, force: true }); }

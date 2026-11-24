@@ -1,6 +1,7 @@
 import { MantineProvider, localStorageColorSchemeManager } from '@mantine/core';
 import { createRoot } from 'react-dom/client';
 import '@mantine/core/styles.css';
+import '@yefengr/pwa-foundation/foundation.css';
 import './pwa-theme.css';
 import './styles.css';
 import { App } from './app';

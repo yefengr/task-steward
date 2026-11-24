@@ -3,7 +3,7 @@ import { HEARTBEAT_INTERVAL_MS } from '@pi-steward/contract';
 import type { LauncherHeartbeatResponse, LauncherSessionDirective, LocalConfig } from '@pi-steward/contract';
 import type { Platform } from './platform.js';
 import { PlatformError } from './platform.js';
-import { SessionControl } from './session-control.js';
+import { SessionControl, supportsResumeArgs, validateLocator } from './session-control.js';
 import type { PermissionClock } from './session-control.js';
 import type { Execution, State } from './state.js';
 import type { Tmux, TmuxHealth } from './tmux.js';
@@ -170,12 +170,21 @@ export class Launcher {
     const claim = record.claim!;
     const project = this.options.config.projects.find(({ id }) => id === claim.projectId);
     if (!project) { this.exited(record); return; }
+    if (claim.kind === 'rework') {
+      const failure = !claim.sessionLocator ? 'session_record_missing' : validateLocator(claim.sessionLocator) ??
+        (supportsResumeArgs(this.options.config.pi.extraArgs) ? undefined : 'session_config_unsupported');
+      if (failure) {
+        this.options.warn?.(`返修无法启动（${failure}），未回退到登记目录或其他会话。`);
+        this.exited(record);
+        return;
+      }
+    }
     // 记录已开始尝试启动的时刻。调用结果未知时，下次必须核对，避免重复启动。
     record.phase = 'launching';
     record.startedAt = this.now();
     this.persist();
     const launched = await this.retryable(async () => {
-      await this.options.tmux.launch(record.target, claim, project.path);
+      await this.options.tmux.launch(record.target, claim, claim.sessionLocator?.path ?? project.path);
       return true;
     });
     if (launched) this.started(record);

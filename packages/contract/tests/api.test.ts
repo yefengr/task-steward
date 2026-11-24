@@ -34,6 +34,13 @@ const sessionOperation = { id, attemptId: id, mode: 'restart' };
 const context = { task: { id, projectId, title: task.title, goal: '', acceptance: '', notes: '' }, attempt: { id, kind: 'new' },
   workspace: { path: projectRegistration.path, requirements: ['按项目规范执行'] }, decisions: [decision], deliveries: [delivery], questions: [question] };
 
+it('返修领取携带实际 Pi ID 与精确 locator，仍兼容首次领取', () => {
+  expect(c.claimedAttemptSchema.parse(claimed)).toEqual(claimed);
+  const rework = { ...claimed, kind: 'rework', restoreSession: true, sessionId: locator.sessionId, sessionLocator: locator };
+  expect(c.claimedAttemptSchema.parse(rework)).toEqual(rework);
+  expect(c.claimedAttemptSchema.safeParse({ ...rework, sessionLocator: { ...locator, path: 'relative' } }).success).toBe(false);
+});
+
 type SchemaName = Extract<keyof typeof c, `${string}Schema`>;
 const samples = {
   agentSchema: ['pi', 'other'], taskStatusSchema: ['review', 'needs_verification'], errorCodeSchema: ['conflict', 'unknown'],

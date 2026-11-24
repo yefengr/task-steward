@@ -104,13 +104,17 @@ export function tmuxClient(config: LocalConfig, options: {
     },
     async launch(target: string, claim: ClaimedAttempt, projectPath: string) {
       const message = `${claim.kind === 'rework' ? '返修本任务。' : '开始执行本任务。'}${instructions}`;
+      const locator = claim.sessionLocator;
+      if (claim.kind === 'rework' && !locator) throw new TmuxError(true);
       try {
         await exec(['new-session', '-d', '-s', target,
           // tmux 会解析目录中的格式标记，并处理参数末尾的分号。
-          '-c', `${projectPath.replaceAll('#', '##')}/.`,
+          '-c', `${(locator?.path ?? projectPath).replaceAll('#', '##')}/.`,
+          ...(locator ? ['-e', 'STEWARD_RESUME=1'] : []),
           '-e', `STEWARD_ATTEMPT_ID=${claim.id}`, '-e', escapedTmuxArg(`STEWARD_CONFIG=${options.configPath}`),
           '-e', escapedTmuxArg(`PATH=${path}`), '--', config.pi.command, ...config.pi.extraArgs,
-          '-e', options.extensionPath, '--session-id', claim.sessionId, '-n', displayName(claim.displayName), '--', message]);
+          '-e', options.extensionPath, ...(locator ? ['--session', escapedTmuxArg(locator.sessionFile)] : ['--session-id', claim.sessionId]),
+          '-n', displayName(claim.displayName), '--', message]);
       } catch { throw new TmuxError(); }
     },
     async launchResume(target: string, attemptId: string, locator: PiSessionLocator): Promise<number> {

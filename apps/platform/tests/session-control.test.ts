@@ -50,6 +50,30 @@ async function replacement(x: Fixture, taskId: string, body: ReturnType<typeof i
   return next.id;
 }
 
+it.each(['restart', 'restore'] as const)('resume 交付后的返修继承精确 locator，并可再次 %s', async (mode) => {
+  const x = await setup();
+  const { taskId, source } = await running(x);
+  const moved = { ...alternate, gitKind: 'linked', gitBranch: 'feature/worktree' };
+  await ok(x.agent(source.id, '/workspace', request({ workspace: moved })));
+  const resumed = await replacement(x, taskId, intent(source.id));
+  await ok(started(x, resumed));
+  await ok(session(x, resumed, alternate));
+  const delivered = c.agentDeliveryResponseSchema.parse(await (await x.agent(resumed, '/deliveries', request(delivery))).json());
+  await ok(x.exit(resumed));
+  expect((await x.action(taskId, 'rework', { deliveryId: delivered.deliveryId, feedback: '补测' })).status).toBe(200);
+  const rework = await x.claimed();
+  expect(rework).toMatchObject({ kind: 'rework', sessionId: alternate.sessionId, sessionLocator: alternate, restoreSession: true });
+  expect(x.store.get('SELECT workspace_path, confirmed_session_id FROM attempts WHERE id=?', rework.id)).toMatchObject({
+    workspace_path: alternate.path, confirmed_session_id: alternate.sessionId,
+  });
+  await ok(started(x, rework.id));
+  await ok(session(x, rework.id, alternate));
+  if (mode === 'restore') await ok(x.exit(rework.id));
+  const next = intent(rework.id, mode);
+  await replacement(x, taskId, next);
+  expect((await beat(x)).sessionOperations).toMatchObject([{ step: 'launch', locator: alternate }]);
+});
+
 it.each(['started first', 'loaded first'])('同机替换需要 started 和严格匹配的 loaded，顺序：%s', async (order) => {
   const x = await setup();
   const { taskId, source, firstStart } = await running(x);
@@ -108,7 +132,7 @@ it.each(['started first', 'loaded first'])('同机替换需要 started 和严格
   expect(completed.attempts.at(-1)?.sessionId).toBe(alternate.sessionId);
   const machineDetail = await (await x.send(`/task-management/tasks/${taskId}`, undefined, { machine: x.token })).json();
   expect(machineDetail).not.toHaveProperty('sessionOperation');
-  expect(machineDetail.attempts.at(-1)).toMatchObject({ kind: 'new', sessionId: source.sessionId });
+  expect(machineDetail.attempts.at(-1)).toMatchObject({ kind: 'new', sessionId: alternate.sessionId });
   await ok(x.agent(next.id, '/progress', request({ text: '已恢复' })));
   expect((await beat(x)).sessionOperations).toEqual([]);
   expect((await beat(x)).directives).toMatchObject([{ attemptId: next.id }]);

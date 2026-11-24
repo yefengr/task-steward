@@ -169,7 +169,9 @@ it('同机返修和中断后重排均指向被退回的交付，不使用中断�
   expect((await x.agent(a.id, '/workspace', request({ workspace: detached }))).status).toBe(200);
   await returnForRework(x, task.id, a.id);
   const b = await x.claimed();
-  expect(b).toMatchObject({ kind: 'rework', sessionId: a.sessionId, restoreSession: true });
+  expect(b).toMatchObject({ kind: 'rework', sessionId: detached.sessionId, sessionLocator: {
+    path: detached.path, sessionId: detached.sessionId, sessionFile: detached.sessionFile,
+  }, restoreSession: true });
   const previous = { attemptId: a.id, machineId: x.machineId, sameMachine: true, workspace: detached };
   expect((await responseOf(c.agentContextResponseSchema, await x.agent(b.id, '/context'))).workspace.previous).toEqual(previous);
   expect((await x.agent(b.id, '/workspace', request({ workspace: { ...workspace, path: '/interrupted/worktree' } }))).status).toBe(200);
@@ -181,6 +183,25 @@ it('同机返修和中断后重排均指向被退回的交付，不使用中断�
 
   expect((await x.agent(resumed.id, '/deliveries', request(delivery))).status).toBe(200);
   expect((await responseOf(c.agentContextResponseSchema, await x.agent(resumed.id, '/context'))).workspace).not.toHaveProperty('previous');
+});
+
+it('最新交付 locator 优先于旧 confirmed，不从更早交付猜测缺失定位', async () => {
+  const x = await setup();
+  await x.heartbeat();
+  const task = await x.create();
+  await x.action(task.id, 'schedule');
+  const a = await x.claimed();
+  expect((await x.agent(a.id, '/workspace', request({ workspace }))).status).toBe(200);
+  const actual = { path: '/actual/worktree', sessionId: 'forked-session', sessionFile: '/sessions/forked.jsonl' };
+  expect((await x.agent(a.id, '/session', request({ locator: actual }))).status).toBe(200);
+  await returnForRework(x, task.id, a.id);
+  const b = await x.claimed();
+  expect(b).toMatchObject({ sessionLocator: actual, sessionId: actual.sessionId });
+  expect(x.store.get('SELECT confirmed_session_id FROM attempts WHERE id=?', b.id)).toEqual({ confirmed_session_id: null });
+  // 最新交付缺失定位时，即使上一轮完整，也不允许回退。
+  x.store.run('UPDATE attempts SET session_locator=NULL WHERE id=?', b.id);
+  await returnForRework(x, task.id, b.id);
+  await errorCode(await x.claim(), 409, 'session_record_missing');
 });
 
 it.each([{ sameMachine: true, recorded: false }, { sameMachine: false, recorded: true }])(
@@ -199,14 +220,14 @@ it.each([{ sameMachine: true, recorded: false }, { sameMachine: false, recorded:
       expect((await x.web(`/tasks/${task.id}`, { machineId: x.otherId, version }, 'PATCH')).status).toBe(200);
     }
     const machine = sameMachine ? x.token : x.otherToken;
-    const { attempt: b } = await responseOf(c.launcherClaimResponseSchema, await x.claim(request(), machine));
-    expect(b).toMatchObject({ kind: 'rework', restoreSession: sameMachine });
-    const context = (path: string, body?: object) => x.send(`/agent${path}`, body, { attempt: b!.id, machine });
-    const prior = await responseOf(c.agentContextResponseSchema, await context('/context'));
-    expect(prior.workspace).toMatchObject({ path: sameMachine ? project.path : otherProject.path });
-    expect(prior.workspace.previous).toEqual({ attemptId: a.id, machineId: x.machineId, sameMachine, workspace: null });
-    expect((await context('/deliveries', request(delivery))).status).toBe(200);
-    const delivered = await responseOf(c.agentContextResponseSchema, await context('/context'));
-    expect(delivered.workspace.previous).toBeNull();
+    await errorCode(await x.claim(request(), machine), 409, 'session_record_missing');
+    expect((await x.detail(task.id)).task.status).toBe('queued');
+    const ordinary = await x.create('不被缺定位返修阻塞', { machineId: sameMachine ? x.machineId : x.otherId });
+    expect((await x.action(ordinary.id, 'schedule')).status).toBe(200);
+    const result = await responseOf(c.launcherClaimResponseSchema, await x.claim(request(), machine));
+    expect(result.attempt).toMatchObject({ taskId: ordinary.id, kind: 'new', restoreSession: false });
+    expect(result.attempt).not.toHaveProperty('sessionLocator');
+    expect((await x.detail(task.id)).attempts).toHaveLength(1);
+    expect((await x.detail(task.id)).task.status).toBe('queued');
   },
 );

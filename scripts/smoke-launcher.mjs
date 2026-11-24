@@ -127,13 +127,15 @@ async function smoke() {
     await once(server, 'listening');
     const origin = `http://127.0.0.1:${server.address().port}`;
     app = createApp({ store, publicOrigin: origin, accessPasswordHash: await hashPassword(password), allowLocalHttp: true, now });
+    const fakePi = join(folder, 'fake-pi.mjs');
+    writeFileSync(fakePi, `#!${process.execPath}\nimport ${JSON.stringify(new URL('./fake-agent.mjs', import.meta.url).href)};\n`, { mode: 0o700 });
     const config = {
       platformUrl: origin, allowHttpLoopback: true, machineToken, slots: 1,
       projects: [{ id: 'smoke', name: '假 Agent 项目', path: workspace }],
       path: [...new Set([dirname(process.execPath), ...(env.PATH ?? '').split(':').filter((item) => item.startsWith('/'))])],
       pi: piPath ? { command: piPath, extraArgs: ['--offline', '--no-approve', '--no-extensions', '--no-context-files',
         '--no-skills', '--no-builtin-tools', '--provider', 'steward-smoke', '--model', 'local',
-        '-e', join(root, 'scripts/discussion-smoke-provider.mjs')] } : { command: process.execPath, extraArgs: [join(root, 'scripts/fake-agent.mjs')] },
+        '-e', join(root, 'scripts/discussion-smoke-provider.mjs')] } : { command: fakePi, extraArgs: [] },
     };
     writeFileSync(configPath, JSON.stringify(config), { mode: 0o600, flag: 'wx' });
     const extensionPath = join(root, 'packages/pi-extension/dist/index.js');

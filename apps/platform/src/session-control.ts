@@ -4,6 +4,7 @@ import type { LauncherSessionDirective, LauncherSessionReport, PiSessionLocator,
   Task, WebSessionOperation, WebSessionOperationRequest } from '@pi-steward/contract';
 import { reject } from './errors.js';
 import type { Store } from './store.js';
+import { attemptLocator, confirmedLocator, sameLocator } from './session-locator.js';
 import { activeAttempt, isOnline, occupiedSlots, requireMachine, requireTask } from './views.js';
 import type { AttemptRow } from './views.js';
 
@@ -17,16 +18,6 @@ interface OperationRow {
   id: string; task_id: string; machine_id: string; source_attempt_id: string; replacement_id: string | null;
   mode: WebSessionOperation['mode']; locator: string; step: 'stop' | 'launch' | 'cleanup' | 'succeeded' | 'failed';
   deadline_at: number; loaded_at: number | null; failure: SessionOperationFailure | null;
-}
-
-function confirmedLocator(attempt: AttemptRow): PiSessionLocator | undefined {
-  const result = piSessionLocatorSchema.safeParse({ path: attempt.confirmed_workspace_path,
-    sessionId: attempt.confirmed_session_id, sessionFile: attempt.confirmed_session_file });
-  return result.success ? result.data : undefined;
-}
-
-function sameLocator(a: PiSessionLocator | undefined, b: PiSessionLocator) {
-  return a?.path === b.path && a.sessionId === b.sessionId && a.sessionFile === b.sessionFile;
 }
 
 function latestAttempt(store: Store, taskId: string) {
@@ -89,7 +80,7 @@ export function requestSessionOperation(store: Store, taskId: string, input: Web
   if (input.mode === 'restore' && occupiedSlots(store, machine.id, now) >= machine.slots) {
     reject('session_slots_full', 'The original machine has no free execution slots');
   }
-  const locator = source.session_locator ? piSessionLocatorSchema.parse(JSON.parse(source.session_locator)) : confirmedLocator(source);
+  const locator = attemptLocator(source);
   if (!locator) reject('session_record_missing', 'The execution has no saved Pi session locator');
 
   const previous = store.get<OperationRow>("SELECT * FROM session_operations WHERE task_id=? AND step='stop'", taskId);

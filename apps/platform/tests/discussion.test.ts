@@ -183,6 +183,9 @@ it('Pi 本地收尾可重放，返修需要新请求且只能人工验收最新�
   const task = await x.create('讨论返修', { type: 'discussion' });
   await x.action(task.id, 'schedule');
   const first = await x.claimed();
+  expect((await x.agent(first.id, '/session', request({ locator: {
+    path: project.path, sessionId: first.sessionId, sessionFile: '/sessions/discussion.jsonl',
+  } }))).status).toBe(200);
   const old = await ask(x, first.id, '上一尝试的问题');
   const end = request();
   expect(await (await x.agent(first.id, '/end-discussion', end)).json()).toEqual({ ok: true });

@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ClaimedAttempt, LocalConfig } from '@pi-steward/contract';
@@ -23,7 +23,7 @@ function fixture(warn?: (message: string) => void) {
   const config: LocalConfig = { platformUrl: 'https://steward.example', machineToken: `stm_${randomBytes(32).toString('base64url')}`,
     slots: 1, projects: [{ id: 'test', name: 'Project', path: '/tmp/中文 project' }], path: ['/usr/bin'], pi: { command: 'pi', extraArgs: [] } };
   const attempt: ClaimedAttempt = { id, taskId: randomUUID(), projectId: 'test', agent: 'pi', sessionId: targetFor(randomUUID()),
-    restoreSession: true, displayName: '项目', kind: 'rework' };
+    restoreSession: false, displayName: '项目', kind: 'new' };
   let now = 1_800_000_000_000;
   let active = false;
   let cancelled = false;
@@ -56,6 +56,30 @@ function fixture(warn?: (message: string) => void) {
       now: () => now, warn }),
   };
 }
+
+it.each(['valid', 'no-locator', 'directory', 'file', 'id', 'cwd'])(
+  '返修只使用精确工作树会话，失败不回退：%s', async (mode) => {
+    const warn = vi.fn();
+    const x = fixture(warn);
+    const path = realpathSync(join(x.path, '..'));
+    const locator = { path, sessionId: randomUUID(), sessionFile: join(path, 'session.jsonl') };
+    writeFileSync(locator.sessionFile, JSON.stringify({ type: 'session', id: mode === 'id' ? 'other' : locator.sessionId,
+      cwd: mode === 'cwd' ? '/not-the-worktree' : path }) + '\n');
+    if (mode === 'directory') locator.path = join(path, 'missing');
+    if (mode === 'file') locator.sessionFile = join(path, 'missing.jsonl');
+    Object.assign(x.attempt, { kind: 'rework', restoreSession: true, sessionId: locator.sessionId,
+      ...(mode === 'no-locator' ? {} : { sessionLocator: locator }) });
+    await x.restart().tick();
+    if (mode === 'valid') {
+      expect(x.launch).toHaveBeenCalledExactlyOnceWith(x.target, x.attempt, path);
+      expect(warn).not.toHaveBeenCalled();
+    } else {
+      expect(x.launch).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('未回退'));
+      expect(x.report).toHaveBeenCalledWith(expect.objectContaining({ kind: 'exited' }));
+    }
+  },
+);
 
 it('领取前落盘，启动前记下目标与时刻，报告成功后清理 outbox', async () => {
   const x = fixture();

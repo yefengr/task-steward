@@ -137,8 +137,11 @@ it('实际现场仅由所属机器的运行中实施尝试确认，可更新且�
   expect(context.workspace).not.toHaveProperty('previous');
   expect(context.workspace.requirements.join(' ')).toContain('Do not create a branch or worktree for read-only work.');
   const web = await (await x.web(`/tasks/${task.id}`)).text();
-  for (const value of Object.values(updated)) expect(web).not.toContain(value);
-  expect((await x.detail(task.id)).events.map(({ kind }) => kind)).not.toContain('workspace');
+  const { sessionId, ...privateWorkspace } = updated;
+  for (const value of Object.values(privateWorkspace)) expect(web).not.toContain(value);
+  const detail = await x.detail(task.id);
+  expect(detail.attempts[0]?.sessionId).toBe(sessionId);
+  expect(detail.events.map(({ kind }) => kind)).not.toContain('workspace');
 
   expect((await x.agent(a.id, '/deliveries', request(delivery))).status).toBe(200);
   await errorCode(await x.agent(a.id, '/workspace', request({ workspace })), 409, 'conflict');

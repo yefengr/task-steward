@@ -1,6 +1,7 @@
 import { REPLY_REMINDER_DELAY_MS, MACHINE_ONLINE_WINDOW_MS, taskStatusSchema } from '@pi-steward/contract';
 import type { Agent, Attempt, AttemptWorkspace, Delivery, Task, TaskStatus, TaskType, WaitingReason, WebMachine, WebProject, WebTaskDetailResponse } from '@pi-steward/contract';
 import { reject } from './errors.js';
+import { sessionOperationView } from './session-control.js';
 import type { Store } from './store.js';
 
 export interface TaskRow {
@@ -9,7 +10,8 @@ export interface TaskRow {
   created_by: 'user' | 'agent'; version: number; created_at: number; updated_at: number;
 }
 export interface AttemptRow {
-  id: string; task_id: string; machine_id: string; agent: Agent; kind: Attempt['kind']; session_id: string;
+  id: string; task_id: string; machine_id: string; agent: Agent; kind: Exclude<Attempt['kind'], 'resume'>; session_id: string;
+  resumed_from_attempt_id: string | null; session_locator: string | null;
   tmux_session: string | null; claimed_at: number; started_at: number | null; lease_expires_at: number;
   cancel_requested: number; discussion_end_requested_at: number | null; ended_at: number | null;
   exit_code: number | null; result: Attempt['result']; workspace_path: string;
@@ -18,7 +20,7 @@ export interface AttemptRow {
 }
 interface MachineRow {
   id: string; name: string; revoked_at: number | null; slots: number; last_seen_at: number | null;
-  launcher_version: string | null;
+  launcher_version: string | null; session_control: number;
 }
 interface ProjectRow { id: string; name: string; last_machine_id: string | null; created_at: number }
 interface DeliveryRow {
@@ -56,8 +58,11 @@ export function executionMachine(store: Store, taskId: string) {
   return store.get<{ machineId: string | null }>(`SELECT ${executionMachineSql} AS machineId
     FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?`, taskId)?.machineId ?? null;
 }
-export function occupiedSlots(store: Store, machineId: string) {
-  return store.get<{ count: number }>('SELECT COUNT(*) count FROM attempts WHERE machine_id=? AND ended_at IS NULL', machineId)!.count;
+export function occupiedSlots(store: Store, machineId: string, now: number) {
+  return store.get<{ count: number }>(`SELECT
+    (SELECT COUNT(*) FROM attempts WHERE machine_id=? AND ended_at IS NULL) +
+    (SELECT COUNT(*) FROM session_operations o JOIN attempts a ON a.id=o.source_attempt_id
+      WHERE o.machine_id=? AND o.step='stop' AND o.deadline_at>? AND a.ended_at IS NOT NULL) AS count`, machineId, machineId, now)!.count;
 }
 export function activeAttempt(store: Store, taskId: string) {
   return store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? AND ended_at IS NULL', taskId);
@@ -79,7 +84,7 @@ function waiting(store: Store, task: TaskRow, active: AttemptRow | undefined, no
     return 'machine_project_unregistered';
   }
   if (!isOnline(machine, now)) return 'machine_offline';
-  if (occupiedSlots(store, machineId) >= machine.slots) return 'slots_full';
+  if (occupiedSlots(store, machineId, now) >= machine.slots) return 'slots_full';
   return null;
 }
 export function taskView(store: Store, task: TaskRow, now: number): Task {
@@ -116,24 +121,29 @@ export function questionViews(store: Store, taskId: string) {
   return store.all<WebTaskDetailResponse['questions'][number]>(`SELECT id, task_id taskId, attempt_id attemptId, text,
     context, status, created_at createdAt, updated_at updatedAt FROM questions WHERE task_id=? ORDER BY created_at, rowid`, taskId);
 }
-function attemptViews(store: Store, taskId: string, now: number): Attempt[] {
+function attemptViews(store: Store, taskId: string, now: number, includeSessionControl: boolean): Attempt[] {
   return store.all<AttemptRow & { name: string }>(`SELECT a.*, m.name FROM attempts a JOIN machines m ON m.id=a.machine_id
     WHERE a.task_id=? ORDER BY a.claimed_at, a.rowid`, taskId).map((a) => ({
-    id: a.id, taskId: a.task_id, machineId: a.machine_id, machineName: a.name, agent: a.agent, kind: a.kind,
-    sessionId: a.session_id, tmuxSession: a.tmux_session, claimedAt: a.claimed_at, startedAt: a.started_at,
+    id: a.id, taskId: a.task_id, machineId: a.machine_id, machineName: a.name, agent: a.agent,
+    kind: includeSessionControl && a.resumed_from_attempt_id ? 'resume' : a.kind,
+    sessionId: (includeSessionControl ? (a.session_locator ? (JSON.parse(a.session_locator) as { sessionId: string }).sessionId :
+      a.confirmed_session_id) : null) ?? a.session_id,
+    tmuxSession: a.tmux_session, claimedAt: a.claimed_at, startedAt: a.started_at,
     leaseExpiresAt: a.lease_expires_at, cancelRequested: Boolean(a.cancel_requested), endedAt: a.ended_at,
     exitCode: a.exit_code, result: a.result, needsVerification: a.ended_at === null && a.lease_expires_at < now,
   }));
 }
-export function taskDetail(store: Store, id: string, now: number): WebTaskDetailResponse {
+export function taskDetail(store: Store, id: string, now: number, { includeSessionControl = true } = {}): WebTaskDetailResponse {
   const task = taskView(store, requireTask(store, id), now);
   const progress = store.all<WebTaskDetailResponse['progress'][number]>(`SELECT id, task_id taskId, attempt_id attemptId,
     text, created_at createdAt FROM progress WHERE task_id=? ORDER BY created_at, rowid`, id);
   const events = store.all<Omit<WebTaskDetailResponse['events'][number], 'payload'> & { payload: string }>(
     `SELECT id, task_id taskId, attempt_id attemptId, actor, kind, payload, created_at createdAt
     FROM task_events WHERE task_id=? ORDER BY created_at, rowid`, id).map((row) => ({ ...row, payload: JSON.parse(row.payload) }));
-  return { task, progress, events, attempts: attemptViews(store, id, now), deliveries: deliveryViews(store, id),
-    decisions: decisionViews(store, id), questions: questionViews(store, id) };
+  const attempts = attemptViews(store, id, now, includeSessionControl);
+  const sessionOperation = includeSessionControl ? sessionOperationView(store, task, attempts.at(-1), now) : undefined;
+  return { task, progress, events, attempts, deliveries: deliveryViews(store, id),
+    decisions: decisionViews(store, id), questions: questionViews(store, id), ...(sessionOperation ? { sessionOperation } : {}) };
 }
 export function projectViews(store: Store): WebProject[] {
   const projects = store.all<ProjectRow>('SELECT * FROM projects ORDER BY name, id');
@@ -147,10 +157,11 @@ export function projectViews(store: Store): WebProject[] {
 export function machineViews(store: Store, now: number): WebMachine[] {
   return store.all<MachineRow>('SELECT * FROM machines ORDER BY name').map((machine) => {
     const activeTasks = store.all<WebMachine['activeTasks'][number]>(`SELECT t.id, t.title, t.project_id projectId,
-      a.id attemptId FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.machine_id=? AND a.ended_at IS NULL
-      ORDER BY a.claimed_at, a.rowid`, machine.id);
+      a.id attemptId FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.machine_id=? AND (a.ended_at IS NULL OR EXISTS (
+        SELECT 1 FROM session_operations o WHERE o.source_attempt_id=a.id AND o.step='stop' AND o.deadline_at>?
+      )) ORDER BY a.claimed_at, a.rowid`, machine.id, now);
     return { id: machine.id, name: machine.name, online: isOnline(machine, now), slots: machine.slots,
-      occupiedSlots: activeTasks.length, launcherVersion: machine.launcher_version, lastSeenAt: machine.last_seen_at,
+      occupiedSlots: occupiedSlots(store, machine.id, now), launcherVersion: machine.launcher_version, lastSeenAt: machine.last_seen_at,
       revokedAt: machine.revoked_at, activeTasks, projects: store.all<WebMachine['projects'][number]>(
         `SELECT p.id, p.name FROM projects p JOIN machine_projects mp ON mp.project_id=p.id
         WHERE mp.machine_id=? ORDER BY p.name, p.id`, machine.id) };

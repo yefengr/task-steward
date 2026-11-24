@@ -182,6 +182,56 @@ test('讨论结束请求不重复，且不会挡住返修后新一轮的结束�
   await expect(row).not.toContainText('已请求结束');
 });
 
+test('任务详情确认重启和恢复，并区分在原对话继续与重新安排', async ({ page, platform }) => {
+  const { origin, password, api } = platform;
+  const name = '继续原 Pi 会话';
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(origin);
+  await signIn(page, password);
+  await page.getByRole('main').getByRole('link', { name: new RegExp(projectName) }).click();
+  await createTask(page, { title: name, type: '讨论' });
+  await page.getByRole('button', { name: '安排开始', exact: true }).click();
+  await expect(page.getByText('等待启动器领取', { exact: true })).toBeVisible();
+  await api.register(true);
+  const original = await api.claim();
+  if (!original) throw new Error('No initial Pi attempt');
+  await api.started(original.id);
+  await api.session(original.id, original.sessionId);
+  await page.reload();
+  await page.getByRole('button', { name: '重启 Pi 会话', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('可能中止当前回复或工具操作，已经写入的文件不会回滚');
+  await expect(dialog).toContainText('测试 Mac');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await dialog.getByRole('button', { name: '重启 Pi 会话', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: '正在重启 Pi 会话' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '取消任务', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '结束讨论', exact: true })).toBeDisabled();
+  const stop = (await api.register(true)).sessionOperations?.[0];
+  if (stop?.step !== 'stop') throw new Error('Expected stop permission');
+  await api.sessionReport(stop.id, { step: 'stop', result: 'stopped' });
+  const launch = (await api.register(true)).sessionOperations?.[0];
+  if (launch?.step !== 'launch') throw new Error('Expected launch permission');
+  expect(launch.replacementId).not.toBe(original.id);
+  await api.started(launch.replacementId);
+  await page.reload();
+  await expect(page.getByRole('status').filter({ hasText: '正在重启 Pi 会话' })).toBeVisible();
+  await api.session(launch.replacementId, original.sessionId);
+  await expect(page.getByRole('status').filter({ hasText: '请到 Pi Reach 发送新消息继续' })).toBeVisible({ timeout: 13_000 });
+  await api.exited(launch.replacementId);
+  await page.reload();
+  await expect(page.getByText('「重新安排」会开启新的执行，不接旧对话。', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: '重新安排', exact: true })).toBeVisible();
+  await confirm(page, '恢复原会话');
+  await expect(page.getByRole('status').filter({ hasText: '正在恢复原会话' })).toBeVisible();
+  const restore = (await api.register(true)).sessionOperations?.[0];
+  if (restore?.step !== 'stop') throw new Error('Expected restore preflight');
+  await api.sessionReport(restore.id, { step: 'stop', result: 'failed', failure: 'session_record_missing' });
+  await page.reload();
+  await expect(page.getByRole('alert')).toContainText('原 Pi 会话文件不存在或不匹配');
+  await expect(page.getByRole('button', { name: '恢复原会话', exact: true })).toBeVisible();
+});
+
 test('生产静态资源和页面入口保持各自的响应', async ({ request, platform }) => {
   const { origin } = platform;
   const ticket = 'a684b6a7-ab2e-45e2-81ba-1f8b42f6e774';

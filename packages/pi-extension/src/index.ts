@@ -6,6 +6,7 @@ import { registerAttemptControl } from './attempt-control.js';
 import { AgentError, agentClient, taskManagementClient, validatedBody } from './client.js';
 import type { ClientOptions } from './client.js';
 import { retryableWrites } from './retry-writes.js';
+import { registerSessionReport } from './session-report.js';
 import { registerTaskSession } from './task-session.js';
 import { checkReworkWorkspace, currentWorkspace } from './workspace.js';
 
@@ -100,6 +101,7 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
   registerTaskSession(pi, attempt.success);
   if (!attempt.success) return;
   const request = agentClient(attempt.data, options);
+  registerSessionReport(pi, request, options.env.STEWARD_RESUME === '1');
   const control = registerAttemptControl(pi, attempt.data, request);
   const write = retryableWrites();
   const requestId = deliveryId(attempt.data);

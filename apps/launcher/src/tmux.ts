@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { ClaimedAttempt, LocalConfig } from '@pi-steward/contract';
+import type { ClaimedAttempt, LocalConfig, PiSessionLocator } from '@pi-steward/contract';
 
 const runFile = promisify(execFile);
 const escapedTmuxArg = (value: string) => value.endsWith(';') ? `${value.slice(0, -1)}\\;` : value;
@@ -19,7 +19,24 @@ function commandFailure(error: unknown): 'missing' | 'unavailable' {
 }
 
 export class TmuxError extends Error {
-  constructor() { super('无法完成 tmux 操作，将在下次循环重新核对。'); }
+  constructor(readonly notStarted = false) { super('无法完成 tmux 操作，将在下次循环重新核对。'); }
+}
+
+function parsePid(value: string) {
+  const pid = /^[1-9][0-9]*$/u.test(value) ? Number(value) : NaN;
+  return pid > 1 && pid <= 0x7fffffff ? pid : undefined;
+}
+
+function resumeCommandDidNotStart(error: unknown, target: string) {
+  const { code, killed, signal, stderr } = error as {
+    code?: string | number; killed?: boolean; signal?: string | null; stderr?: string;
+  };
+  if (code === 'ENOENT' || code === 'EACCES') return true;
+  if (code !== 1 || killed || signal || typeof stderr !== 'string') return false;
+  const message = stderr.trimEnd();
+  // 只认 tmux 同步拒绝或 fork 失败；超时、退出信号及其它响应不能证明没启动。
+  return message === `duplicate session: ${target}` || message === `invalid session name: ${target}` ||
+    /^(?:create window failed: )?fork failed(?:: [^\r\n]+)?$/u.test(message);
 }
 
 export function displayName(title: string) {
@@ -63,6 +80,28 @@ export function tmuxClient(config: LocalConfig, options: {
       if (!Array.isArray(sessions)) return 'unavailable';
       return sessions.includes(target) ? 'present' : 'absent';
     },
+    async panePid(target: string): Promise<number | undefined> {
+      try {
+        const { stdout } = await exec(['list-panes', '-s', '-t', `=${target}`, '-F', '#{session_name}\t#{pane_pid}']);
+        const [name, pid, extra] = stdout.trimEnd().split('\t');
+        return name === target && pid !== undefined && extra === undefined ? parsePid(pid) : undefined;
+      } catch { return undefined; }
+    },
+    async hasResumeIdentity(attemptId: string): Promise<boolean> {
+      const target = `=${targetFor(attemptId)}`;
+      try {
+        const attempt = await exec(['show-environment', '-t', target, 'STEWARD_ATTEMPT_ID']);
+        if (attempt.stdout !== `STEWARD_ATTEMPT_ID=${attemptId}\n`) return false;
+        const resume = await exec(['show-environment', '-t', target, 'STEWARD_RESUME']);
+        return resume.stdout === 'STEWARD_RESUME=1\n';
+      } catch { return false; }
+    },
+    processStatus(pid: number): 'alive' | 'dead' | 'unavailable' {
+      if (parsePid(String(pid)) === undefined) return 'unavailable';
+      try { process.kill(pid, 0); return 'alive'; } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'unavailable';
+      }
+    },
     async launch(target: string, claim: ClaimedAttempt, projectPath: string) {
       const message = `${claim.kind === 'rework' ? '返修本任务。' : '开始执行本任务。'}${instructions}`;
       try {
@@ -73,6 +112,21 @@ export function tmuxClient(config: LocalConfig, options: {
           '-e', escapedTmuxArg(`PATH=${path}`), '--', config.pi.command, ...config.pi.extraArgs,
           '-e', options.extensionPath, '--session-id', claim.sessionId, '-n', displayName(claim.displayName), '--', message]);
       } catch { throw new TmuxError(); }
+    },
+    async launchResume(target: string, attemptId: string, locator: PiSessionLocator): Promise<number> {
+      if (target !== targetFor(attemptId)) throw new TmuxError(true);
+      try {
+        const { stdout } = await exec(['new-session', '-d', '-s', target, '-P', '-F', '#{pane_pid}',
+          '-c', `${locator.path.replaceAll('#', '##')}/.`, '-e', `STEWARD_ATTEMPT_ID=${attemptId}`,
+          '-e', escapedTmuxArg(`STEWARD_CONFIG=${options.configPath}`), '-e', 'STEWARD_RESUME=1',
+          '-e', escapedTmuxArg(`PATH=${path}`), '--',
+          ...[config.pi.command, ...config.pi.extraArgs, '-e', options.extensionPath, '--session', locator.sessionFile].map(escapedTmuxArg)]);
+        const pid = parsePid(stdout.trim());
+        if (pid !== undefined) return pid;
+      } catch (error) {
+        throw new TmuxError(resumeCommandDidNotStart(error, target));
+      }
+      throw new TmuxError();
     },
     async cancel(target: string) {
       try { await exec(['kill-session', '-t', `=${target}`]); } catch { throw new TmuxError(); }

@@ -3,7 +3,7 @@ import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rm
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
-import { claimedAttemptSchema, launcherExitedRequestSchema, launcherStartedRequestSchema, timestampSchema, tmuxSessionSchema, uuidSchema } from '@pi-steward/contract';
+import { claimedAttemptSchema, launcherExitedRequestSchema, launcherSessionReportSchema, launcherStartedRequestSchema, timestampSchema, tmuxSessionSchema, uuidSchema } from '@pi-steward/contract';
 
 const execution = z.strictObject({
   id: uuidSchema,
@@ -11,6 +11,8 @@ const execution = z.strictObject({
   phase: z.enum(['prepared', 'launching', 'observed', 'exited']),
   claim: claimedAttemptSchema.optional(),
   startedAt: timestampSchema.optional(),
+  pid: z.int().min(2).max(0x7fffffff).optional(),
+  sessionOperationId: uuidSchema.optional(),
 }).refine(({ id, target, phase, claim, startedAt }) => target === `steward-${id}` &&
   (!claim || claim.id === id) &&
   (phase !== 'prepared' || !!claim) && (phase !== 'launching' || startedAt !== undefined));
@@ -18,16 +20,29 @@ const event = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('started'), id: uuidSchema, body: launcherStartedRequestSchema }),
   z.strictObject({ kind: z.literal('exited'), id: uuidSchema, body: launcherExitedRequestSchema }),
 ]);
+const sessionOperation = z.strictObject({
+  id: uuidSchema,
+  attemptId: uuidSchema,
+  replacementId: uuidSchema.optional(),
+  step: z.enum(['stop', 'launch', 'cleanup']),
+  stopIssued: z.boolean().optional(),
+  launchIssued: z.boolean().optional(),
+  report: launcherSessionReportSchema.optional(),
+  reportAcknowledged: z.boolean().optional(),
+}).refine(({ step, replacementId, report }) => (step === 'stop') === (replacementId === undefined) &&
+  (!report || report.step === step));
 const stateSchema = z.strictObject({
   version: z.literal(1),
   claimRequestId: uuidSchema.optional(),
   lastHeartbeatAt: timestampSchema.optional(),
   executions: z.array(execution),
+  sessionOperations: z.array(sessionOperation).optional(),
   outbox: z.array(event),
 });
 
 export type State = z.infer<typeof stateSchema>;
 export type Execution = z.infer<typeof execution>;
+export type SessionOperation = z.infer<typeof sessionOperation>;
 export type Event = z.infer<typeof event>;
 
 export function loadState(path: string): State {

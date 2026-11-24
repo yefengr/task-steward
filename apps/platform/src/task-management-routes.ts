@@ -27,7 +27,8 @@ export function mountTaskManagement(store: Store, now: () => number) {
   management.get('/tasks/:id', (context) => {
     authenticate(context);
     const id = routeParam(context.req.param('id'), c.uuidSchema);
-    return context.json(c.webTaskDetailResponseSchema.parse(taskDetail(store, id, now())));
+    // 旧版 Pi 扩展严格解析执行类型和会话标识。仅网页详情返回操作状态和实际 Pi 会话标识。
+    return context.json(c.webTaskDetailResponseSchema.parse(taskDetail(store, id, now(), { includeSessionControl: false })));
   });
   management.post('/tasks', async (context) => {
     authenticate(context);

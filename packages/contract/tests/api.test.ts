@@ -28,7 +28,9 @@ const machine = { id, name: 'Mac', online: true, slots: 1, occupiedSlots: 0, las
 const claimed = { id, taskId: id, projectId, agent: 'pi', sessionId: tmuxSession, restoreSession: false, displayName: '标题', kind: 'new' };
 const projectRegistration = { id: projectId, name: project.name, path: '/work/项目' };
 const heartbeat = { ...request, launcherVersion: 'test', slots: 1, projects: [projectRegistration], attempts: [{ id, tmuxSession, running: true }] };
-const workspace = { path: '/work/linked', gitKind: 'linked', gitBranch: 'feature/test', sessionId: id, sessionFile: '/work/sessions/test.jsonl' };
+const locator = { path: '/work/linked', sessionId: id, sessionFile: '/work/sessions/test.jsonl' };
+const workspace = { ...locator, gitKind: 'linked', gitBranch: 'feature/test' };
+const sessionOperation = { id, attemptId: id, mode: 'restart' };
 const context = { task: { id, projectId, title: task.title, goal: '', acceptance: '', notes: '' }, attempt: { id, kind: 'new' },
   workspace: { path: projectRegistration.path, requirements: ['按项目规范执行'] }, decisions: [decision], deliveries: [delivery], questions: [question] };
 
@@ -40,7 +42,7 @@ const samples = {
   textSchema: ['', null], nonEmptyTextSchema: ['正文', '\n '], machineTokenSchema: [`stm_${'A'.repeat(43)}`, 'stm_short'],
   tmuxSessionSchema: [tmuxSession, 'another-session'], emptyRequestSchema: [{}, { extra: true }],
   okResponseSchema: [ok, { ok: false }], requestIdSchema: [request, { requestId: '' }],
-  taskTypeSchema: ['discussion', 'chat'], titleSchema: [' 标题 ', ' '], attemptKindSchema: ['rework', 'resume'], attemptResultSchema: ['delivered', 'done'],
+  taskTypeSchema: ['discussion', 'chat'], titleSchema: [' 标题 ', ' '], attemptKindSchema: ['resume', 'retry'], attemptResultSchema: ['delivered', 'done'],
   waitingReasonSchema: ['previous_attempt_active', 'rework'], questionStatusSchema: ['open', 'unknown'], slotsSchema: [0, -1],
   taskContentSchema: [taskContent, { ...taskContent, machineId: '' }], taskSchema: [task, { ...task, needsVerification: 'yes' }],
   attemptSchema: [attempt, { ...attempt, leaseExpiresAt: null }], deliveryContentSchema: [deliveryContent, { ...deliveryContent, done: '完成' }],
@@ -70,6 +72,15 @@ const samples = {
   launcherStartedRequestSchema: [{ ...request, tmuxSession, startedAt: 100 }, { ...request, tmuxSession }],
   launcherExitedRequestSchema: [{ ...request, exitCode: null, endedAt: 100 }, { ...request, endedAt: 100, exitCode: '0' }],
   launcherStartedResponseSchema: [ok, {}], launcherExitedResponseSchema: [ok, {}],
+  absoluteWorkspacePathSchema: [locator.path, './work'], piSessionIdSchema: [id, '../../test'],
+  piSessionLocatorSchema: [locator, { ...locator, machineId: id }],
+  agentSessionRequestSchema: [{ ...request, locator }, { ...request, locator: { ...locator, sessionId: null } }],
+  sessionOperationModeSchema: ['restart', 'reschedule'], sessionOperationFailureSchema: ['session_launch_failed', 'unknown'],
+  webSessionOperationSchema: [{ ...sessionOperation, status: 'pending', failure: null }, { ...sessionOperation, status: 'pending' }],
+  webSessionOperationRequestSchema: [{ ...request, attemptId: id, mode: 'restore' }, { ...request, mode: 'restore', locator }],
+  launcherSessionDirectiveSchema: [{ ...sessionOperation, step: 'launch', locator, validForMs: 100, replacementId: id },
+    { ...sessionOperation, step: 'launch', locator, validForMs: 0, replacementId: id }],
+  launcherSessionReportSchema: [{ ...request, step: 'stop', result: 'stopped' }, { ...request, step: 'launch', result: 'stopped' }],
   attemptWorkspaceSchema: [workspace, { ...workspace, sessionFile: 'relative.jsonl' }],
   agentWorkspaceRequestSchema: [{ ...request, workspace }, { ...request, workspace: { ...workspace, machineId: id } }],
   agentContextResponseSchema: [context, { ...context, decisions: [{ ...decision, confirmedByUser: false }] }],

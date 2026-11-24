@@ -69,7 +69,7 @@ function AttemptRecord({ attempt }: { attempt: Attempt }) {
   const results = { delivered: t.task.resultDelivered, interrupted: t.task.resultInterrupted, cancelled: t.task.resultCancelled };
   const result = attempt.result ? results[attempt.result] : attempt.cancelRequested ? t.task.resultClosing : t.task.resultActive;
   return <article className="attempt-record">
-    <h4>{attempt.machineName} · {attempt.kind === 'new' ? t.task.kindNew : t.task.kindRework}</h4>
+    <h4>{attempt.machineName} · {{ new: t.task.kindNew, rework: t.task.kindRework, resume: t.task.kindResume }[attempt.kind]}</h4>
     <dl className="kv">
       <dt>{t.task.result}</dt><dd>{result}{attempt.needsVerification && ` · ${t.task.needsVerification}`}</dd>
       <dt>{t.form.agent}</dt><dd>{attempt.agent === 'pi' ? 'Pi' : t.form.claude}</dd>

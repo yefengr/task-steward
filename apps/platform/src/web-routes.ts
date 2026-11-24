@@ -7,6 +7,7 @@ import type { AppOptions } from './app.js';
 import { createWebSession, deleteWebSession, LoginLimiter, loginSource, originConfig, passwordVerifier, SESSION_COOKIE, webSessionValid } from './auth.js';
 import { reject } from './errors.js';
 import { mountWebPairing } from './pairing-routes.js';
+import { requestSessionOperation } from './session-control.js';
 import { createTask, requestDiscussionEnd, taskAction, updateTask } from './tasks.js';
 import { machineViews, projectViews, requireProject, taskDetail, taskView } from './views.js';
 import type { TaskRow } from './views.js';
@@ -74,6 +75,11 @@ export function mountWeb(options: AppOptions, now: () => number) {
     const id = routeParam(context.req.param('id'), c.uuidSchema);
     const input = await jsonInput(context, c.webUpdateTaskRequestSchema);
     return context.json(store.immediate(() => c.webTaskMutationResponseSchema.parse(updateTask(store, id, input, now()))));
+  });
+  web.post('/tasks/:id/session-operation', async (context) => {
+    const id = routeParam(context.req.param('id'), c.uuidSchema);
+    const input = await jsonInput(context, c.webSessionOperationRequestSchema);
+    return context.json(store.immediate(() => c.okResponseSchema.parse(requestSessionOperation(store, id, input, now()))));
   });
   web.post('/tasks/:id/end-discussion', async (context) => {
     const id = routeParam(context.req.param('id'), c.uuidSchema);

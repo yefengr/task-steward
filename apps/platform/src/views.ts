@@ -126,8 +126,8 @@ function attemptViews(store: Store, taskId: string, now: number, includeSessionC
     WHERE a.task_id=? ORDER BY a.claimed_at, a.rowid`, taskId).map((a) => ({
     id: a.id, taskId: a.task_id, machineId: a.machine_id, machineName: a.name, agent: a.agent,
     kind: includeSessionControl && a.resumed_from_attempt_id ? 'resume' : a.kind,
-    sessionId: (includeSessionControl ? (a.session_locator ? (JSON.parse(a.session_locator) as { sessionId: string }).sessionId :
-      a.confirmed_session_id) : null) ?? a.session_id,
+    sessionId: (a.session_locator ? (JSON.parse(a.session_locator) as { sessionId: string }).sessionId :
+      a.confirmed_session_id) ?? a.session_id,
     tmuxSession: a.tmux_session, claimedAt: a.claimed_at, startedAt: a.started_at,
     leaseExpiresAt: a.lease_expires_at, cancelRequested: Boolean(a.cancel_requested), endedAt: a.ended_at,
     exitCode: a.exit_code, result: a.result, needsVerification: a.ended_at === null && a.lease_expires_at < now,

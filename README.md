@@ -17,7 +17,7 @@ Task Steward 是面向个人的跨电脑任务清单与执行协调系统。你�
 
 ## 本地开发
 
-在仓库根目录用 Node 24.20.0 或同一 Node 24 系列的更高版本、pnpm 11.20.0 运行 `pnpm install --frozen-lockfile`，再运行 `pnpm verify`。构建后可运行 `node scripts/smoke-launcher.mjs` 验证假 Agent 和 tmux 链路，或运行 `pnpm --filter @pi-steward/web test:e2e` 执行浏览器测试。要验证真实 Pi 的两种讨论收尾入口，可运行 `node scripts/smoke-launcher.mjs --real-pi <Pi 可执行文件的绝对路径>`；该命令使用独立 tmux、本机测试平台和确定性测试模型，不调用远端模型。发布及启动器配置见[部署与 Mac 接入](docs/DEPLOYMENT.md)。
+在仓库根目录用 Node 24.20.0 或同一 Node 24 系列的更高版本、pnpm 11.20.0 运行 `pnpm install --frozen-lockfile`，再运行 `pnpm verify`。构建后可运行 `node scripts/smoke-launcher.mjs` 验证假 Agent 和 tmux 链路，或运行 `pnpm --filter @pi-steward/web test:e2e` 执行浏览器测试。要验证真实 Pi 的两种讨论收尾入口，可运行 `node scripts/smoke-launcher.mjs --real-pi <Pi 可执行文件的绝对路径>`；该命令使用独立 tmux、本机测试平台和确定性测试模型，不调用远端模型。工作树迁移后的会话定位可运行 `node scripts/smoke-session-locator.mjs <Pi 可执行文件的绝对路径>` 验证，覆盖重启、恢复、返修及现场缺失；[事故与回归说明](docs/plans/active/20261124-session-locator-regression.md)保留人工恢复参照。发布及启动器配置见[部署与 Mac 接入](docs/DEPLOYMENT.md)。
 
 ## 阅读重点
 

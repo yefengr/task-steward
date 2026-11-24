@@ -152,6 +152,7 @@ test('讨论结束请求不重复，且不会挡住返修后新一轮的结束�
   await expect(page.getByText('等待启动器领取', { exact: true })).toBeVisible();
   const attempt = await api.claim();
   if (!attempt) throw new Error('No discussion attempt claimed');
+  await api.session(attempt.id, attempt.sessionId);
   await api.started(attempt.id);
   await api.question(attempt.id, questionText);
   await page.reload();
@@ -273,6 +274,7 @@ test('桌面新建、编辑、安排、返修和验收，移动端登录后保�
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
   const first = await api.claim();
   if (!first) throw new Error('No first attempt claimed');
+  await api.session(first.id, first.sessionId);
   await api.started(first.id);
   await api.progress(first.id, '正在检查详情与状态更新');
   // 等待 10 秒轮询可见进展，确认页面不需要手动刷新。

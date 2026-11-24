@@ -208,12 +208,27 @@ it('返修核对真实工作树、Git 分支与 Pi 会话，在目标会话保�
   agent.useSession(original);
   expect((await agent.call('steward_record_workspace')).details).toEqual({ code: 'task_context_required' });
   await agent.call('steward_task');
+  await agent.fire('session_start', { reason: 'startup' });
+  await agent.fire('session_shutdown');
   agent.useSession(target);
+  await agent.fire('session_start', { reason: 'fork' });
   const workspaceInfo = { path: linked, gitKind: 'linked' as const, gitBranch: 'feature/old',
     sessionId: target.getSessionId(), sessionFile: target.getSessionFile()! };
   expect((await agent.call('steward_record_workspace')).details).toEqual({ ok: true, workspace: workspaceInfo });
   expect(JSON.parse(String(fetcher.mock.calls.at(-1)?.[1]?.body))).toEqual({ requestId: expect.any(String), workspace: workspaceInfo });
   expect(workspaceInfo.sessionId).not.toBe(original.getSessionId());
+  await agent.fire('session_shutdown');
+  const restarted = mockTools(fetcher, { attemptId: context.attempt.id, config: configFile(), resumed: true });
+  restarted.useSession(SessionManager.open(workspaceInfo.sessionFile));
+  await restarted.fire('session_start', { reason: 'startup' });
+  try {
+    await vi.waitFor(() => {
+      const calls = fetcher.mock.calls.filter(([url]) => String(url).endsWith('/agent/session'));
+      expect(JSON.parse(String(calls.at(-1)?.[1]?.body))).toMatchObject({ locator: {
+        path: linked, sessionId: workspaceInfo.sessionId, sessionFile: workspaceInfo.sessionFile,
+      } });
+    });
+  } finally { await restarted.fire('session_shutdown'); }
 
   context.attempt.kind = 'rework';
   const prior = { attemptId: randomUUID(), machineId: randomUUID(), sameMachine: true, workspace: workspaceInfo };

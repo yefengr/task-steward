@@ -101,7 +101,7 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
   registerTaskSession(pi, attempt.success);
   if (!attempt.success) return;
   const request = agentClient(attempt.data, options);
-  registerSessionReport(pi, request, options.env.STEWARD_RESUME === '1');
+  const sessionReport = registerSessionReport(pi, request, options.env.STEWARD_RESUME === '1');
   const control = registerAttemptControl(pi, attempt.data, request);
   const write = retryableWrites();
   const requestId = deliveryId(attempt.data);
@@ -126,10 +126,13 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
     parameters: Type.Object({}),
     execute: (_id, _args, signal, _update, ctx) => report(async () => {
       if (taskContext?.task.type !== 'implementation') throw new AgentError('task_context_required');
-      const workspace = await currentWorkspace(ctx, taskContext.workspace.path);
-      await write('POST', 'workspace', workspace, (requestId) => request('POST', 'workspace', c.okResponseSchema,
-        validatedBody(c.agentWorkspaceRequestSchema, { workspace, requestId }), signal));
-      return { ok: true, workspace };
+      const registeredPath = taskContext.workspace.path;
+      return sessionReport.workspace(async () => {
+        const workspace = await currentWorkspace(ctx, registeredPath);
+        await write('POST', 'workspace', workspace, (requestId) => request('POST', 'workspace', c.okResponseSchema,
+          validatedBody(c.agentWorkspaceRequestSchema, { workspace, requestId }), signal));
+        return { ok: true, workspace };
+      });
     }),
   });
   pi.registerTool({

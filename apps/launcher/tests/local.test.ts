@@ -26,10 +26,11 @@ it('tmux 使用参数数组、精确目标、显式 PATH，并只把处理后的
   const oldSession = targetFor(randomUUID());
   const display = '-@中文\n第二行;#{pane_id}';
   await tmux.launch(target, { id, taskId: randomUUID(), projectId: 'mock', kind: 'rework', restoreSession: true,
-    agent: 'pi', sessionId: oldSession, displayName: display }, '/mock/项目 #{};');
+    sessionLocator: { path: '/mock/项目 #{};', sessionId: oldSession, sessionFile: '/sessions/exact.jsonl' },
+    agent: 'pi', sessionId: oldSession, displayName: display }, '/registered/project');
   expect(run).toHaveBeenCalledWith('tmux', ['-L', 'steward', '-u', '-f', '/dev/null', 'new-session', '-d', '-s', target,
-    '-c', '/mock/项目 ##{};/.', '-e', `STEWARD_ATTEMPT_ID=${id}`, '-e', 'STEWARD_CONFIG=/mock/config\\;', '-e', 'PATH=/mock/node:/usr/bin',
-    '--', config.pi.command, '--flag', '中文 $HOME', '-e', '/mock/extension/index.js', '--session-id', oldSession,
+    '-c', '/mock/项目 ##{};/.', '-e', 'STEWARD_RESUME=1', '-e', `STEWARD_ATTEMPT_ID=${id}`, '-e', 'STEWARD_CONFIG=/mock/config\\;', '-e', 'PATH=/mock/node:/usr/bin',
+    '--', config.pi.command, '--flag', '中文 $HOME', '-e', '/mock/extension/index.js', '--session', '/sessions/exact.jsonl',
     '-n', '中文 第二行   pane_id', '--', expect.stringMatching(/^返修本任务。先调用 steward_task/u)],
   expect.objectContaining({ env: expect.objectContaining({ PATH: '/mock/node:/usr/bin' }) }));
   await tmux.cancel(target);

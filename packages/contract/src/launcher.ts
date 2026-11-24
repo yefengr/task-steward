@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { okResponseSchema, projectIdSchema, requestIdSchema, timestampSchema, tmuxSessionSchema, uuidSchema } from './core.js';
 import { slotsSchema } from './models.js';
-import { launcherSessionDirectiveSchema } from './session-control.js';
+import { launcherSessionDirectiveSchema, piSessionIdSchema, piSessionLocatorSchema } from './session-control.js';
 
 export const launcherHeartbeatRequestSchema = requestIdSchema.extend({
   launcherVersion: z.string().trim().min(1).max(128), slots: slotsSchema,
@@ -22,7 +22,7 @@ export const launcherHeartbeatResponseSchema = z.strictObject({
 export const launcherClaimRequestSchema = requestIdSchema;
 export const claimedAttemptSchema = z.strictObject({
   id: uuidSchema, taskId: uuidSchema, projectId: projectIdSchema, agent: z.literal('pi'),
-  sessionId: tmuxSessionSchema, restoreSession: z.boolean(),
+  sessionId: piSessionIdSchema, restoreSession: z.boolean(), sessionLocator: piSessionLocatorSchema.optional(),
   displayName: z.string().min(1).max(80), kind: z.enum(['new', 'rework']),
 });
 export const launcherClaimResponseSchema = z.strictObject({ attempt: claimedAttemptSchema.nullable() });

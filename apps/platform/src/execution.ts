@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { LEASE_DURATION_MS } from '@pi-steward/contract';
 import type { LauncherClaimResponse, LauncherExitedRequest, LauncherHeartbeatRequest, LauncherHeartbeatResponse, LauncherStartedRequest } from '@pi-steward/contract';
 import { reject } from './errors.js';
+import { attemptLocator, confirmedLocator, sameLocator } from './session-locator.js';
 import { checkReplacementStart, expireSessionPermissions, launchPending, replacementExited, replacementStarted, sessionDirectives } from './session-control.js';
 import type { Store } from './store.js';
 import { executionMachineSql, isOnline, occupiedSlots, requireMachine, requireTask } from './views.js';
@@ -36,19 +37,37 @@ export function heartbeat(store: Store, machineId: string, input: LauncherHeartb
 export function claim(store: Store, machineId: string, now: number): LauncherClaimResponse {
   const machine = requireMachine(store, machineId);
   if (!isOnline(machine, now) || occupiedSlots(store, machineId, now) >= machine.slots) return { attempt: null };
-  const task = store.get<TaskRow & { local_path: string }>(`SELECT t.*, mp.local_path FROM tasks t
+  const candidates = store.all<TaskRow & { local_path: string }>(`SELECT t.*, mp.local_path FROM tasks t
     JOIN projects p ON p.id=t.project_id JOIN machine_projects mp ON mp.project_id=t.project_id AND mp.machine_id=?
     WHERE t.status='queued' AND t.agent='pi' AND ${executionMachineSql}=mp.machine_id
       AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=t.id AND a.ended_at IS NULL)
-    ORDER BY t.rework_pending DESC, t.position, t.created_at, t.id LIMIT 1`, machineId);
-  if (!task) return { attempt: null };
+    ORDER BY t.rework_pending DESC, t.position, t.created_at, t.id`, machineId);
+  let selected: { task: typeof candidates[number]; previous?: AttemptRow; locator?: ReturnType<typeof attemptLocator> } | undefined;
+  for (const candidate of candidates) {
+    if (!candidate.rework_pending) { selected = { task: candidate }; break; }
+    const latestDelivery = store.get<{ attempt_id: string; review: string }>(
+      'SELECT attempt_id, review FROM deliveries WHERE task_id=? ORDER BY version DESC LIMIT 1', candidate.id);
+    const previous = latestDelivery?.review === 'rework' ? store.get<AttemptRow>(
+      'SELECT * FROM attempts WHERE task_id=? AND id=? AND machine_id=?', candidate.id, latestDelivery.attempt_id, machineId) : undefined;
+    const locator = previous ? attemptLocator(previous) : undefined;
+    // 缺定位的返修保持停止，但不能挡住同机其它可执行任务。
+    if (locator) { selected = { task: candidate, previous, locator }; break; }
+  }
+  if (!selected) {
+    if (candidates.length) reject('session_record_missing', 'Rework requires the latest delivered session on its original machine');
+    return { attempt: null };
+  }
+  const { task, previous, locator } = selected;
   const id = randomUUID();
-  const previous = task.rework_pending ? store.get<{ session_id: string }>(`SELECT session_id FROM attempts
-    WHERE task_id=? AND machine_id=? ORDER BY claimed_at DESC, rowid DESC LIMIT 1`, task.id, machineId) : undefined;
   const kind = task.rework_pending ? 'rework' : 'new';
-  const sessionId = previous?.session_id ?? tmuxTarget(id);
-  store.run(`INSERT INTO attempts (id, task_id, machine_id, agent, kind, session_id, workspace_path, claimed_at, lease_expires_at)
-    VALUES (?,?,?,'pi',?,?,?,?,?)`, id, task.id, machineId, kind, sessionId, task.local_path, now, now + LEASE_DURATION_MS);
+  const sessionId = locator?.sessionId ?? tmuxTarget(id);
+  const inherit = previous && locator && sameLocator(confirmedLocator(previous), locator) ? previous : undefined;
+  store.run(`INSERT INTO attempts (id, task_id, machine_id, agent, kind, session_id, workspace_path, claimed_at, lease_expires_at,
+    session_locator, confirmed_workspace_path, confirmed_git_kind, confirmed_git_branch, confirmed_session_id, confirmed_session_file)
+    VALUES (?,?,?,'pi',?,?,?,?,?,?,?,?,?,?,?)`, id, task.id, machineId, kind, sessionId, locator?.path ?? task.local_path,
+  now, now + LEASE_DURATION_MS, locator ? JSON.stringify(locator) : null, inherit?.confirmed_workspace_path ?? null,
+  inherit?.confirmed_git_kind ?? null, inherit?.confirmed_git_branch ?? null, inherit?.confirmed_session_id ?? null,
+  inherit?.confirmed_session_file ?? null);
   store.run("UPDATE tasks SET status='running', rework_pending=0, version=version+1, updated_at=? WHERE id=?", now, task.id);
   store.run('UPDATE projects SET last_machine_id=? WHERE id=?', machineId, task.project_id);
   store.event(task.id, 'launcher', id, 'claimed', { from: 'queued', to: 'running', kind }, now);
@@ -56,7 +75,7 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
   const safeTitle = task.title.replace(/[^\p{L}\p{N} _-]/gu, ' ').trim().replace(/^[ -]+/, '');
   const displayName = safeTitle.slice(0, 79).replace(/[\uD800-\uDBFF]$/u, '').trimEnd() || 'Pi task';
   return { attempt: { id, taskId: task.id, projectId: task.project_id, agent: 'pi', sessionId,
-    restoreSession: previous !== undefined, displayName, kind } };
+    restoreSession: locator !== undefined, ...(locator ? { sessionLocator: locator } : {}), displayName, kind } };
 }
 
 export function started(store: Store, attempt: AttemptRow, input: LauncherStartedRequest, now: number) {

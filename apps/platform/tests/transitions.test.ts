@@ -47,6 +47,9 @@ it('返修优先、复用 Pi 会话、交付仅一次并允许验收与退出交
   await x.action(job.id, 'schedule');
   const a = await x.claimed();
   await x.action(ordinary.id, 'schedule');
+  expect((await x.agent(a.id, '/session', request({ locator: {
+    path: project.path, sessionId: a.sessionId, sessionFile: '/sessions/first.jsonl',
+  } }))).status).toBe(200);
   const report = request(delivery);
   const d1 = c.agentDeliveryResponseSchema.parse(await (await x.agent(a.id, '/deliveries', report)).json());
   expect(d1.version).toBe(1);

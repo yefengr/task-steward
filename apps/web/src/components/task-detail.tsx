@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Task, WebMachine, WebProject, WebTaskDetailResponse } from '@pi-steward/contract';
 import { Link } from 'wouter';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTaskViewState } from '../lib/task-view-state';
+import { isValidDialogFocus } from '../lib/dialog-focus';
 import { useI18n } from '../lib/i18n';
 import { projectPath } from '../lib/paths';
 import { StatusChip, TaskFlags, TaskTypeLabel, WaitReason } from './common';
@@ -78,6 +79,9 @@ export default function TaskDetail({ detail, project, machines, onChanged }: {
   const { t } = useI18n();
   const { task: remoteTask, attempts } = detail;
   const [savedTask, setSavedTask] = useState<Task>();
+  const backLink = useRef<HTMLAnchorElement>(null);
+  const focusFallback = () => isValidDialogFocus(backLink.current) ? backLink.current
+    : document.querySelector<HTMLAnchorElement>('.mobile-topbar a[href]');
   const task = savedTask && savedTask.version > remoteTask.version ? savedTask : remoteTask;
   const [editing, setEditing] = useTaskViewState<typeof task | undefined>(`editing:${task.id}`, undefined);
   const lastAttempt = attempts.at(-1);
@@ -88,11 +92,11 @@ export default function TaskDetail({ detail, project, machines, onChanged }: {
     progress: <div key="progress" className="current-progress"><Progress detail={detail} /></div>,
     delivery: <div key="delivery" className="current-delivery"><Deliveries deliveries={detail.deliveries} /></div>,
     controls: <div key="controls" className="current-controls"><TaskControls task={task} delivery={detail.deliveries.at(-1)} latestAttempt={lastAttempt}
-      sessionOperation={detail.sessionOperation} onEdit={() => setEditing(task)} onChanged={onChanged} /></div>,
+      sessionOperation={detail.sessionOperation} focusFallback={focusFallback} onEdit={() => setEditing(task)} onChanged={onChanged} /></div>,
   };
   const order = task.status === 'review' ? ['delivery', 'controls', 'progress'] as const : ['progress', 'controls', 'delivery'] as const;
   return <>
-    <Link className="back-link" href={projectPath(task.projectId)}><ChevronLeft size={16} />{projectName}</Link>
+    <Link ref={backLink} className="back-link" href={projectPath(task.projectId)}><ChevronLeft size={16} />{projectName}</Link>
     <header className="detail-head">
       <h1 className="user-text">{task.title}</h1>
       <div className="meta-line">
@@ -110,7 +114,7 @@ export default function TaskDetail({ detail, project, machines, onChanged }: {
     <DiscussionHistory questions={detail.questions.filter((question) => question.status !== 'open')} />
     <Records attempts={detail.attempts} events={detail.events} />
     {editing && <TaskForm initialTask={editing} currentTask={task} initialProject={task.projectId} projects={project ? [project] : []}
-      machines={machines} onConflict={onChanged} onClose={() => setEditing(undefined)}
+      machines={machines} focusFallback={focusFallback} onConflict={onChanged} onClose={() => setEditing(undefined)}
       onSaved={(saved) => { setSavedTask(saved); setEditing(undefined); onChanged(); }} />}
   </>;
 }

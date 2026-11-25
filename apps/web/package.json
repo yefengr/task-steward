@@ -11,7 +11,7 @@
     "@mantine/core": "9.5.2",
     "@mantine/hooks": "9.5.2",
     "@pi-steward/contract": "workspace:*",
-    "@yefengr/pwa-foundation": "0.0.2",
+    "@yefengr/pwa-foundation": "0.0.3",
     "lucide-react": "1.33.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",

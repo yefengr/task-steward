@@ -54,11 +54,29 @@ test('问题前置、最新交付确认ID与失败返修跨导航和视口恢复
   await expect(dialog.getByLabel('返修反馈')).toHaveAttribute('aria-invalid', 'true');
   await dialog.getByLabel('返修反馈').fill('保留的反馈');
   let sent: unknown;
+  let requests = 0;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let arrived!: () => void;
+  const pending = new Promise<void>(resolve => { arrived = resolve; });
   await page.route('**/api/v1/web/tasks/*/rework', async (route) => {
+    requests += 1;
     sent = route.request().postDataJSON();
+    arrived(); await gate;
     await route.abort('failed');
-  }, { times: 1 });
-  await dialog.getByRole('button', { name: '返修', exact: true }).click();
+  });
+  await expect(dialog.locator('.pwa-confirm-actions button')).toHaveText(['返回', '返修']);
+  await dialog.locator('form').evaluate(node => {
+    (node as HTMLFormElement).requestSubmit();
+    (node as HTMLFormElement).requestSubmit();
+  });
+  await pending;
+  await page.keyboard.press('Escape');
+  await page.locator('.mantine-Modal-overlay').click({ position: { x: 2, y: 2 } });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '返回', exact: true })).toBeDisabled();
+  expect(requests).toBe(1);
+  release();
   await expect(dialog.getByRole('alert')).toBeVisible();
   expect(sent).toEqual({ deliveryId: delivery.deliveryId, feedback: '保留的反馈' });
   await page.goBack();
@@ -68,6 +86,7 @@ test('问题前置、最新交付确认ID与失败返修跨导航和视口恢复
   await expect(page.getByRole('dialog').getByRole('alert')).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole('dialog').getByLabel('返修反馈')).toHaveValue('保留的反馈');
+  await expect(dialog.locator('.pwa-confirm-actions button')).toHaveText(['返修', '返回']);
   await page.getByRole('dialog').getByRole('button', { name: '返回', exact: true }).click();
   await page.getByRole('button', { name: '验收通过 · v1' }).click();
   const request = page.waitForRequest('**/api/v1/web/tasks/*/accept');

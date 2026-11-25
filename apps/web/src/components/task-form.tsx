@@ -1,6 +1,8 @@
 import { Alert, Button, Group, Modal, NativeSelect, Select, Stack, Textarea, TextInput } from '@mantine/core';
 import { useClearTaskViewState, useTaskViewState } from '../lib/task-view-state';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useMediaQuery } from '@mantine/hooks';
+import { isValidDialogFocus, restoreDialogFocus } from '../lib/dialog-focus';
 import type { FormEvent } from 'react';
 import { titleSchema, textSchema, webCreateTaskRequestSchema, webUpdateTaskRequestSchema } from '@pi-steward/contract';
 import type { Task, WebMachine, WebProject } from '@pi-steward/contract';
@@ -29,6 +31,7 @@ interface FormProps {
   onClose: () => void;
   onSaved: (task: Task) => void;
   onConflict?: () => void;
+  focusFallback: () => HTMLElement | null;
 }
 
 export function TaskForm(props: FormProps) {
@@ -46,9 +49,36 @@ export function TaskForm(props: FormProps) {
   const [validate, setValidate] = useTaskViewState(key + ':validate', false);
   const clear = useClearTaskViewState();
   const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const busyRef = useRef(busy);
+  // 导航返回的新实例也必须接收旧请求对共享 busy 的解锁。
+  useEffect(() => { busyRef.current = busy; }, [busy]);
+  const closing = useRef(false);
+  const saved = useRef<Task | undefined>(undefined);
+  const [source] = useState(() => document.activeElement as HTMLElement | null);
+  const [opened, setOpened] = useState(false);
+  const mobile = useMediaQuery('(max-width: 767.98px)', undefined, { getInitialValueInEffect: false });
+  useEffect(() => {
+    mounted.current = true;
+    setOpened(true);
+    return () => {
+      mounted.current = false;
+      if (closing.current) { clear(key + ':'); props.onClose(); }
+    };
+  }, []);
   function reset() { clear(key + ':'); }
-  function close() { if (!busy) { reset(); props.onClose(); } }
+  function close() {
+    if (busyRef.current || closing.current) return;
+    closing.current = true;
+    setOpened(false);
+  }
+  function exited() {
+    if (!closing.current) return;
+    closing.current = false;
+    reset();
+    props.onClose();
+    restoreDialogFocus(source, props.focusFallback);
+    if (saved.current && mounted.current) props.onSaved(saved.current);
+  }
   const middlewares = useFloatingSafeMiddlewares();
   const conflict = Boolean(baseTask && props.currentTask && baseTask.version !== props.currentTask.version)
     || (error instanceof WebError && error.code === 'conflict');
@@ -68,9 +98,10 @@ export function TaskForm(props: FormProps) {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy || conflict || currentClosed || fields.length === 0) return;
+    if (busyRef.current || closing.current || conflict || currentClosed || fields.length === 0) return;
     setValidate(true);
     if (!titleSchema.safeParse(draft.title).success || textFields.some((field) => !textSchema.safeParse(draft[field]).success)) return;
+    busyRef.current = true;
     setBusy(true);
     setError(undefined);
     try {
@@ -78,18 +109,28 @@ export function TaskForm(props: FormProps) {
         ? await api.edit(baseTask.id, webUpdateTaskRequestSchema.parse({ version: baseTask.version,
           ...Object.fromEntries(fields.map((field) => [field, draft[field]])) }))
         : await api.create(webCreateTaskRequestSchema.parse({ ...draft, projectId }));
-      reset();
-      // 旧页面可以结束所属目标的草稿，但不能通过旧回调抢走当前路由。
-      props.onClose();
-      if (mounted.current) props.onSaved(result.task);
+      saved.current = result.task;
+      // 导航卸载后仍清原目标，但不调用旧页面的保存/导航回调。
+      if (!mounted.current) { reset(); props.onClose(); return; }
+      closing.current = true;
+      setOpened(false);
     } catch (error) {
       setError(error);
       setBusy(false);
       if (mounted.current && error instanceof WebError && error.code === 'conflict') props.onConflict?.();
+    } finally {
+      busyRef.current = false;
+      // 成功退出期间保持按钮禁用，展示快照直到真实退出完成。
+      if (!closing.current) setBusy(false);
     }
   }
 
-  return <Modal opened onClose={close} title={baseTask ? t.common.editTask : t.common.newTask}
+  const cancelButton = <Button key="cancel" variant="default" onClick={close} disabled={busy}>{t.common.dismiss}</Button>;
+  const submitButton = <Button key="submit" type="submit" loading={busy} disabled={conflict || currentClosed || fields.length === 0 || !projectId}>
+    {baseTask ? t.common.save : t.common.create}
+  </Button>;
+  return <Modal opened={opened} returnFocus={opened || !isValidDialogFocus(document.activeElement as HTMLElement | null)}
+    onExitTransitionEnd={exited} onClose={close} title={baseTask ? t.common.editTask : t.common.newTask}
     closeButtonProps={{ 'aria-label': t.common.close }} closeOnClickOutside={!busy} closeOnEscape={!busy} withCloseButton={!busy}>
     <form onSubmit={submit} noValidate>
       <fieldset disabled={busy} className="task-form-fields"><Stack gap="sm">
@@ -129,10 +170,7 @@ export function TaskForm(props: FormProps) {
         </Alert>}
         {!conflict && <ErrorNotice error={error} />}
         <Group justify="flex-end" className="pwa-confirm-actions">
-          <Button type="submit" loading={busy} disabled={conflict || currentClosed || fields.length === 0 || !projectId}>
-            {baseTask ? t.common.save : t.common.create}
-          </Button>
-          <Button variant="default" onClick={close} disabled={busy}>{t.common.dismiss}</Button>
+          {mobile ? [submitButton, cancelButton] : [cancelButton, submitButton]}
         </Group>
       </Stack></fieldset>
     </form>

@@ -105,7 +105,12 @@ function WorkspacePage({ projectId, taskId, location, logout }: {
       </Suspense>}
     </>}
     {!home && !machinesPage && !pairingPage && !projectId && !taskId && <Empty><Link href="/">{t.common.goHome}</Link></Empty>}
-    {creating && <TaskForm initialProject={creating} projects={projects} machines={machines} onClose={() => setCreating(undefined)}
+    {creating && <TaskForm initialProject={creating} projects={projects} machines={machines}
+      focusFallback={() => {
+        const main = document.querySelector<HTMLElement>('main');
+        main?.setAttribute('tabindex', '-1');
+        return main;
+      }} onClose={() => setCreating(undefined)}
       onSaved={(task) => { setCreating(undefined); navigate(taskPath(task.id)); }} />}
   </Shell>;
 }

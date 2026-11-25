@@ -19,6 +19,14 @@ Task Steward 是面向个人的跨电脑任务清单与执行协调系统。你�
 
 在仓库根目录用 Node 24.20.0 或同一 Node 24 系列的更高版本、pnpm 11.20.0 运行 `pnpm install --frozen-lockfile`，再运行 `pnpm verify`。构建后可运行 `node scripts/smoke-launcher.mjs` 验证假 Agent 和 tmux 链路，或运行 `pnpm --filter @pi-steward/web test:e2e` 执行浏览器测试。要验证真实 Pi 的两种讨论收尾入口，可运行 `node scripts/smoke-launcher.mjs --real-pi <Pi 可执行文件的绝对路径>`；该命令使用独立 tmux、本机测试平台和确定性测试模型，不调用远端模型。工作树迁移后的会话定位可运行 `node scripts/smoke-session-locator.mjs <Pi 可执行文件的绝对路径>` 验证，覆盖重启、恢复、返修及现场缺失；[事故与回归说明](docs/plans/active/20261124-session-locator-regression.md)保留人工恢复参照。发布及启动器配置见[部署与 Mac 接入](docs/DEPLOYMENT.md)。
 
+## 前端公共规范
+
+网页精确消费公开 npm `@yefengr/pwa-foundation@0.0.3` 的安全区、主题与 Mantine 控件，不另维护一份公共设计规范。共享颜色、字体、间距、表面、确认顺序、关闭回焦与可访问性引用包内 [DESIGN.md](https://github.com/yefengr/pi-reach/blob/main/packages/pwa-foundation/DESIGN.md)，消费方法见包 [README](https://github.com/yefengr/pi-reach/blob/main/packages/pwa-foundation/README.md)。DESIGN.md 自 `0.0.3` 随包分发，上游源码已合入；旧版 `0.0.2` 不含此文档，不回写旧发布制品。
+
+宿主负责 Provider 与真实 Portal 作用域、按布局生成确认区 DOM、Modal 关闭生命周期、busy 门禁和有效焦点后备。本轮仅对齐任务表单与任务确认入口；品牌、业务状态映射、权限/API、路由/history、任务草稿的内存持久期与 PWA 策略不变。
+
+其余差异不在本轮扩建设置页：字号三档已有公共 token，但偏好入口与系统字号读取尚需接线或后续提取；外观包已支持系统／浅色／深色，现有入口缺项属于宿主接线；复制与基本折叠复用 Mantine，反馈和动效后续按公共规范对齐。细分隔、发丝线检测与表面角色留待后续视觉基础，通用动效读取、触控按压撤销和外点按保护留待后续交互辅助；这些不代表 `0.0.2` 已自动提供。
+
 ## 阅读重点
 
 本系统是一个任务台账，加上每台 Mac 上自动领取任务的启动器。平台部署在私人服务器，以单 Docker 容器运行，负责清单、领取条件、交付记录和通知，不接模型，也不托管 Agent 进程。任务怎么完成交给项目 Agent 和项目已有规范，源码与工作现场保留在执行电脑。

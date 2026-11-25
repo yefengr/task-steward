@@ -16,7 +16,7 @@ for (const scheme of ['light', 'dark'] as const) {
     test('真实页面消费npm主题、输入和Modal默认值，保持焦点约束和Escape关闭', async ({ page, platform }) => {
       const require = createRequire(import.meta.url);
       const resolved = require.resolve('@yefengr/pwa-foundation/mantine');
-      expect(resolved).toContain('@yefengr+pwa-foundation@0.0.2');
+      expect(resolved).toContain('@yefengr+pwa-foundation@0.0.3');
       const css = readFileSync(new URL('../src/pwa-theme.css', import.meta.url), 'utf8');
       expect(css).not.toMatch(/--pwa-(?:font-ui|text-body|radius-2xl|tonal|duration-modal-in)\s*:/);
       await login(page, platform.origin, platform.password);
@@ -33,23 +33,26 @@ for (const scheme of ['light', 'dark'] as const) {
       await expect(title).toHaveCSS('font-size', '16px');
       expect(Math.round((await title.boundingBox())!.height)).toBeGreaterThanOrEqual(44);
       const cancel = dialog.getByRole('button', { name: '返回', exact: true });
+      const confirm = dialog.getByRole('button', { name: '创建任务', exact: true });
       const close = dialog.getByRole('button', { name: '关闭', exact: true });
+      await expect(dialog.locator('.pwa-confirm-actions button')).toHaveText(['返回', '创建任务']);
       await close.focus();
       await page.keyboard.press('Shift+Tab');
-      await expect(cancel).toBeFocused();
+      await expect(confirm).toBeFocused();
       await page.keyboard.press('Tab');
       await expect(close).toBeFocused();
       await expect(cancel).toHaveAttribute('data-variant', 'default');
       await expect(cancel).toHaveCSS('background-color', scheme === 'light' ? 'rgb(235, 235, 235)' : 'rgb(64, 64, 64)');
       await expect(dialog).toHaveCSS('opacity', '1');
-      await page.screenshot({ path: artifact(`foundation-002-${scheme}-desktop.png`) });
+      await page.screenshot({ path: artifact(`foundation-003-${scheme}-desktop.png`) });
       await cancel.click();
-      await expect(dialog).toBeHidden();
-      // 此宿主原先就条件挂载opened=true的Modal，回焦仍受应用生命周期限制；不把本次主题接入扩为生命周期修复。
+      await expect(dialog).toHaveCount(0);
+      await expect(trigger).toBeFocused();
       await trigger.click();
       await expect(dialog).toBeVisible();
       await page.keyboard.press('Escape');
-      await expect(dialog).toBeHidden();
+      await expect(dialog).toHaveCount(0);
+      await expect(trigger).toBeFocused();
     });
   });
 }
@@ -85,7 +88,7 @@ test.describe('触控页面与确认布局', () => {
     const navigation = page.getByRole('dialog');
     await expect(navigation).toHaveCSS('border-radius', '0px');
     await expect(navigation).toHaveCSS('opacity', '1');
-    await page.screenshot({ path: artifact('foundation-002-mobile-drawer.png') });
+    await page.screenshot({ path: artifact('foundation-003-mobile-drawer.png') });
     await navigation.getByRole('button', { name: '关闭', exact: true }).click();
     await expect(navigation).toBeHidden();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

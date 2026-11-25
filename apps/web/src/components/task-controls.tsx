@@ -1,7 +1,10 @@
 import { Button, Group, Modal, Stack, Textarea } from '@mantine/core';
 import { PWA_CONFIRM_DIALOG_SIZE } from '@yefengr/pwa-foundation/mantine';
 import { useTaskViewState } from '../lib/task-view-state';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import { useMediaQuery } from '@mantine/hooks';
+import { isValidDialogFocus, restoreDialogFocus } from '../lib/dialog-focus';
 import { nonEmptyTextSchema } from '@pi-steward/contract';
 import type { Attempt, Delivery, Task, WebSessionOperation, WebSessionOperationRequest } from '@pi-steward/contract';
 import { api } from '../lib/api';
@@ -15,11 +18,18 @@ const primaryActions: Partial<Record<Task['status'], TaskAction>> = {
   unscheduled: 'schedule', queued: 'unschedule', interrupted: 'reschedule',
 };
 
-export function TaskControls({ task, delivery, latestAttempt, sessionOperation, onEdit, onChanged }: {
+export function TaskControls({ task, delivery, latestAttempt, sessionOperation, onEdit, onChanged, focusFallback }: {
   task: Task; delivery?: Delivery; latestAttempt?: Attempt; sessionOperation?: WebSessionOperation;
-  onEdit: () => void; onChanged: () => void;
+  onEdit: () => void; onChanged: () => void; focusFallback: () => HTMLElement | null;
 }) {
   const { t } = useI18n();
+  const completedSource = useRef<HTMLElement | null | undefined>(undefined);
+  useEffect(() => {
+    if (completedSource.current === undefined) return;
+    const source = completedSource.current;
+    completedSource.current = undefined;
+    restoreDialogFocus(source, focusFallback);
+  }, [task.version]);
   const [confirmation, setConfirmation] = useTaskViewState<Confirmation | undefined>(`confirmation:${task.id}`, undefined, true);
   const [error, setError] = useTaskViewState<unknown>(`action-error:${task.id}`, undefined);
   const [busy, setBusy] = useTaskViewState(`action-busy:${task.id}`, false);
@@ -78,12 +88,14 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
     </div>}
     <ErrorNotice error={error} />
     {confirmation && <ConfirmTaskAction taskId={task.id} confirmation={confirmation} onClose={() => setConfirmation((current) => current === confirmation ? undefined : current)}
-      onChanged={onChanged} />}
+      onChanged={onChanged} onSucceeded={(source) => { completedSource.current = source; onChanged(); }} focusFallback={focusFallback} />}
   </>;
 }
 
-function ConfirmTaskAction({ taskId, confirmation, onClose, onChanged }: {
+function ConfirmTaskAction({ taskId, confirmation, onClose, onChanged, onSucceeded, focusFallback }: {
   taskId: string; confirmation: Confirmation; onClose: () => void; onChanged: () => void;
+  focusFallback: () => HTMLElement | null;
+  onSucceeded: (source: HTMLElement | null) => void;
 }) {
   const { t } = useI18n();
   const { action } = confirmation;
@@ -91,18 +103,45 @@ function ConfirmTaskAction({ taskId, confirmation, onClose, onChanged }: {
   const [invalid, setInvalid] = useTaskViewState(`feedback-invalid:${taskId}`, false);
   const [error, setError] = useTaskViewState<unknown>(`confirm-error:${taskId}`, undefined);
   const [busy, setBusy] = useTaskViewState(`confirm-busy:${taskId}`, false);
+  const busyRef = useRef(busy);
+  // 导航返回的新实例也必须接收旧请求对共享 busy 的解锁。
+  useEffect(() => { busyRef.current = busy; }, [busy]);
+  const closing = useRef(false);
+  const mounted = useRef(true);
+  const succeeded = useRef(false);
+  const [source] = useState(() => document.activeElement as HTMLElement | null);
+  const [opened, setOpened] = useState(false);
+  const mobile = useMediaQuery('(max-width: 767.98px)', undefined, { getInitialValueInEffect: false });
+  useEffect(() => {
+    mounted.current = true;
+    setOpened(true);
+    return () => {
+      mounted.current = false;
+      if (closing.current) { setFeedback(''); setInvalid(false); setError(undefined); setBusy(false); onClose(); }
+    };
+  }, []);
+  function clear() { setFeedback(''); setInvalid(false); setError(undefined); }
   function close() {
-    if (busy) return;
-    setFeedback(''); setInvalid(false); setError(undefined); onClose();
+    if (busyRef.current || closing.current) return;
+    closing.current = true;
+    setOpened(false);
+  }
+  function exited() {
+    if (!closing.current) return;
+    closing.current = false;
+    clear(); setBusy(false); onClose();
+    if (succeeded.current) onSucceeded(source);
+    restoreDialogFocus(source, focusFallback);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
+    if (busyRef.current || closing.current) return;
     if (action === 'rework' && !nonEmptyTextSchema.safeParse(feedback).success) {
       setInvalid(true);
       return;
     }
+    busyRef.current = true;
     setBusy(true);
     setError(undefined);
     try {
@@ -110,12 +149,22 @@ function ConfirmTaskAction({ taskId, confirmation, onClose, onChanged }: {
       else if ('request' in confirmation) await api.sessionOperation(taskId, confirmation.request);
       else if (action === 'accept') await api.accept(taskId, confirmation.delivery.id);
       else await api.rework(taskId, confirmation.delivery.id, feedback);
-      setFeedback(''); setInvalid(false); setError(undefined); onClose();
+      succeeded.current = true;
+      if (!mounted.current) { clear(); onClose(); return; }
+      closing.current = true;
+      setOpened(false);
     } catch (error) { setError(error); }
-    finally { setBusy(false); onChanged(); }
+    finally {
+      busyRef.current = false;
+      if (!closing.current) { setBusy(false); if (mounted.current) onChanged(); }
+    }
   }
 
-  return <Modal opened onClose={close} title={t.actions[action]} size={PWA_CONFIRM_DIALOG_SIZE}
+  const cancelButton = <Button key="cancel" variant="default" disabled={busy} onClick={close}>{t.common.dismiss}</Button>;
+  const submitButton = <Button key="submit" type="submit" variant="filled"
+    className={action === 'cancel' || action === 'restart' ? 'pwa-danger-confirm' : undefined} loading={busy}>{t.actions[action]}</Button>;
+  return <Modal opened={opened} returnFocus={opened || !isValidDialogFocus(document.activeElement as HTMLElement | null)}
+    onExitTransitionEnd={exited} onClose={close} title={t.actions[action]} size={PWA_CONFIRM_DIALOG_SIZE}
     closeOnEscape={!busy} closeOnClickOutside={!busy} withCloseButton={!busy} closeButtonProps={{ 'aria-label': t.common.close }}>
     <form onSubmit={submit} noValidate>
       <Stack gap="sm">
@@ -127,8 +176,7 @@ function ConfirmTaskAction({ taskId, confirmation, onClose, onChanged }: {
           onChange={(event) => { setFeedback(event.currentTarget.value); setInvalid(false); }} />}
         <ErrorNotice error={error} />
         <div className="pwa-confirm-actions">
-          <Button type="submit" variant="filled" className={action === 'cancel' || action === 'restart' ? 'pwa-danger-confirm' : undefined} loading={busy}>{t.actions[action]}</Button>
-          <Button variant="default" disabled={busy} onClick={close}>{t.common.dismiss}</Button>
+          {mobile ? [submitButton, cancelButton] : [cancelButton, submitButton]}
         </div>
       </Stack>
     </form>

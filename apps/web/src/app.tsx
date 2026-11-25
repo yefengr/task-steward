@@ -12,6 +12,7 @@ import { useI18n } from './lib/i18n';
 import { projectPath, taskPath } from './lib/paths';
 import { useResource } from './lib/resource';
 import { Login } from './login';
+import { TaskViewStateProvider, useTaskViewState } from './lib/task-view-state';
 
 const TaskDetail = lazy(() => import('./components/task-detail'));
 
@@ -42,7 +43,7 @@ function Workspace({ logout }: { logout: () => Promise<void> }) {
   const [, taskMatch] = useRoute('/tasks/:id');
   const task = uuidSchema.safeParse(taskMatch?.id);
   const project = projectIdSchema.safeParse(projectMatch?.id);
-  return <WorkspacePage key={location} projectId={project.data} taskId={task.data} location={location} logout={logout} />;
+  return <TaskViewStateProvider><WorkspacePage key={location} projectId={project.data} taskId={task.data} location={location} logout={logout} /></TaskViewStateProvider>;
 }
 
 function WorkspacePage({ projectId, taskId, location, logout }: {
@@ -57,7 +58,7 @@ function WorkspacePage({ projectId, taskId, location, logout }: {
   const machines = machineResource.data?.machines ?? [];
   const selectedProject = projectId ?? detail.data?.task.projectId;
   const project = projects.find((project) => project.id === selectedProject);
-  const [creating, setCreating] = useState<string>();
+  const [creating, setCreating] = useTaskViewState<string | undefined>(`creating:${location}`, undefined);
   const [logoutError, setLogoutError] = useState<unknown>();
   async function tryLogout() {
     setLogoutError(undefined);

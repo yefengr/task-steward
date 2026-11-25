@@ -23,7 +23,7 @@ function CommandCopy({ command }: { command: string }) {
   return <>
     <div className="command-line">
       <code>{command}</code>
-      <Button variant="subtle" size="compact-sm" leftSection={state === 'copied' ? <Check size={14} /> : <Copy size={14} />}
+      <Button variant="transparent" leftSection={state === 'copied' ? <Check size={16} /> : <Copy size={16} />}
         aria-label={`${t.onboarding.copy} ${command}`} onClick={() => void copy()}>
         {state === 'copied' ? t.onboarding.copied : t.onboarding.copy}
       </Button>
@@ -50,7 +50,7 @@ export function GettingStarted({ collapsed }: { collapsed: boolean }) {
     </div>
     <div className="onboarding-links">
       <Button component={Link} href="/pair" leftSection={<Terminal size={16} />}>{t.onboarding.confirm}</Button>
-      <Button component={Link} href="/machines" variant="subtle" leftSection={<Laptop size={16} />}>{t.onboarding.viewMachines}</Button>
+      <Button component={Link} href="/machines" variant="transparent" leftSection={<Laptop size={16} />}>{t.onboarding.viewMachines}</Button>
     </div>
   </>;
   if (collapsed) return <details className="onboarding fold">
@@ -132,7 +132,7 @@ export function PairComputer() {
     <p className="muted small">{t.pair.startHint}</p>
     <div className="action-bar">
       <Button component={Link} href="/machines" leftSection={<Laptop size={16} />}>{t.pair.machines}</Button>
-      <Button variant="subtle" onClick={reset}>{t.pair.again}</Button>
+      <Button variant="transparent" onClick={reset}>{t.pair.again}</Button>
     </div>
   </section>;
 
@@ -152,8 +152,8 @@ export function PairComputer() {
       <p className="callout warning">{t.pair.warning}</p>
       <div className="action-bar">
         <Button onClick={() => void approve()} loading={busy === 'approve'}>{t.pair.approve}</Button>
-        <Button variant="subtle" onClick={() => void inspect()} disabled={Boolean(busy)}>{t.pair.recheck}</Button>
-        <Button variant="subtle" onClick={reset} disabled={Boolean(busy)}>{t.pair.changeCode}</Button>
+        <Button variant="transparent" onClick={() => void inspect()} disabled={Boolean(busy)}>{t.pair.recheck}</Button>
+        <Button variant="transparent" onClick={reset} disabled={Boolean(busy)}>{t.pair.changeCode}</Button>
       </div>
     </section> : <form className="pair-card pair-form" onSubmit={submit} noValidate>
       <TextInput label={t.pair.code} placeholder={t.pair.placeholder} value={code} maxLength={10}

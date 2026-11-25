@@ -1,6 +1,6 @@
 import { ActionIcon, Button, Drawer, useMantineColorScheme } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
-import { ArrowLeft, Folder, Globe, Laptop, LogOut, Menu, Plus, Sun } from 'lucide-react';
+import { ChevronLeft, Folder, Globe, Laptop, LogOut, Menu, Plus, Sun } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { Link } from 'wouter';
@@ -75,8 +75,9 @@ export function Shell(props: ShellProps) {
     <main className="main">
       <header className="mobile-topbar">
         {props.back
-          ? <ActionIcon component={Link} href={props.back} variant="subtle" size={44} aria-label={t.common.back}><ArrowLeft size={20} /></ActionIcon>
+          ? <ActionIcon component={Link} href={props.back} variant="subtle" size={44} aria-label={t.common.back}><ChevronLeft size={20} /></ActionIcon>
           : <ActionIcon onClick={() => setMenu(true)} variant="subtle" size={44} aria-label={t.common.openMenu}><Menu size={20} /></ActionIcon>}
+        {props.back && <ActionIcon onClick={() => setMenu(true)} variant="subtle" size={44} aria-label={t.common.openMenu}><Menu size={20} /></ActionIcon>}
         {props.taskPage ? <span className="mobile-page-title">{props.title}</span> : <h1 className="mobile-page-title">{props.title}</h1>}
         <ActionIcon onClick={props.onNew} disabled={!props.projects.length} variant="subtle" size={44}
           aria-label={t.common.newTask}><Plus size={22} /></ActionIcon>

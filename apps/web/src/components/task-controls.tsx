@@ -1,5 +1,6 @@
 import { Button, Group, Modal, Stack, Textarea } from '@mantine/core';
-import { useState } from 'react';
+import { PWA_CONFIRM_DIALOG_SIZE } from '@yefengr/pwa-foundation/mantine';
+import { useTaskViewState } from '../lib/task-view-state';
 import type { FormEvent } from 'react';
 import { nonEmptyTextSchema } from '@pi-steward/contract';
 import type { Attempt, Delivery, Task, WebSessionOperation, WebSessionOperationRequest } from '@pi-steward/contract';
@@ -19,11 +20,11 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
   onEdit: () => void; onChanged: () => void;
 }) {
   const { t } = useI18n();
-  const [confirmation, setConfirmation] = useState<Confirmation>();
-  const [error, setError] = useState<unknown>();
-  const [busy, setBusy] = useState(false);
-  const [ending, setEnding] = useState(false);
-  const [endRequestedFor, setEndRequestedFor] = useState<string>();
+  const [confirmation, setConfirmation] = useTaskViewState<Confirmation | undefined>(`confirmation:${task.id}`, undefined, true);
+  const [error, setError] = useTaskViewState<unknown>(`action-error:${task.id}`, undefined);
+  const [busy, setBusy] = useTaskViewState(`action-busy:${task.id}`, false);
+  const [ending, setEnding] = useTaskViewState(`ending:${task.id}`, false);
+  const [endRequestedFor, setEndRequestedFor] = useTaskViewState<string | undefined>(`ended:${task.id}`, undefined);
   const activeAttemptId = latestAttempt?.endedAt === null ? latestAttempt.id : undefined;
   const endRequested = activeAttemptId !== undefined && endRequestedFor === activeAttemptId;
   const closed = task.status === 'done' || task.status === 'cancelled';
@@ -59,22 +60,24 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
   return <>
     {!closed && <div className="action-bar">
       {sessionAction === 'restore' && !pending && <Button disabled={busy} onClick={confirmSessionAction}>{t.actions.restore}</Button>}
-      {primary && <Button loading={busy} disabled={pending} variant={primary === 'unschedule' || sessionAction === 'restore' ? 'light' : 'filled'}
+      {primary && <Button loading={busy} disabled={pending} variant={primary === 'unschedule' || sessionAction === 'restore' ? 'default' : 'filled'}
         onClick={() => void execute(primary)}>{t.actions[primary]}</Button>}
       {canEndDiscussion && <Button loading={ending} disabled={busy || pending}
         onClick={() => void endDiscussion()}>{t.actions.endDiscussion}</Button>}
-      {sessionAction === 'restart' && !pending && <Button variant="light" disabled={busy || ending}
-        onClick={confirmSessionAction}>{t.actions.restart}</Button>}
       {task.status === 'review' && delivery?.review === null && <>
         <Button onClick={() => setConfirmation({ action: 'accept', delivery })}>{t.actions.accept} · v{delivery.version}</Button>
-        <Button variant="light" onClick={() => setConfirmation({ action: 'rework', delivery })}>{t.actions.rework}</Button>
+        <Button variant="default" onClick={() => setConfirmation({ action: 'rework', delivery })}>{t.actions.rework}</Button>
       </>}
-      <Button variant="light" disabled={busy} onClick={onEdit}>{t.common.editTask}</Button>
-      <Button variant="light" color="red" disabled={busy || ending || (pending && !sessionOperation.needsExitVerification)}
+      <div className="task-management"><p>{t.task.management}</p><Group gap="xs">
+      {sessionAction === 'restart' && !pending && <Button variant="outline" disabled={busy || ending}
+        onClick={confirmSessionAction}>{t.actions.restart}</Button>}
+      <Button variant="transparent" disabled={busy} onClick={onEdit}>{t.common.editTask}</Button>
+      <Button variant="outline" disabled={busy || ending || (pending && !sessionOperation.needsExitVerification)}
         onClick={() => setConfirmation({ action: 'cancel' })}>{t.actions.cancel}</Button>
+      </Group></div>
     </div>}
     <ErrorNotice error={error} />
-    {confirmation && <ConfirmTaskAction taskId={task.id} confirmation={confirmation} onClose={() => setConfirmation(undefined)}
+    {confirmation && <ConfirmTaskAction taskId={task.id} confirmation={confirmation} onClose={() => setConfirmation((current) => current === confirmation ? undefined : current)}
       onChanged={onChanged} />}
   </>;
 }
@@ -84,10 +87,14 @@ function ConfirmTaskAction({ taskId, confirmation, onClose, onChanged }: {
 }) {
   const { t } = useI18n();
   const { action } = confirmation;
-  const [feedback, setFeedback] = useState('');
-  const [invalid, setInvalid] = useState(false);
-  const [error, setError] = useState<unknown>();
-  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useTaskViewState(`feedback:${taskId}`, '');
+  const [invalid, setInvalid] = useTaskViewState(`feedback-invalid:${taskId}`, false);
+  const [error, setError] = useTaskViewState<unknown>(`confirm-error:${taskId}`, undefined);
+  const [busy, setBusy] = useTaskViewState(`confirm-busy:${taskId}`, false);
+  function close() {
+    if (busy) return;
+    setFeedback(''); setInvalid(false); setError(undefined); onClose();
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -103,26 +110,26 @@ function ConfirmTaskAction({ taskId, confirmation, onClose, onChanged }: {
       else if ('request' in confirmation) await api.sessionOperation(taskId, confirmation.request);
       else if (action === 'accept') await api.accept(taskId, confirmation.delivery.id);
       else await api.rework(taskId, confirmation.delivery.id, feedback);
-      onClose();
+      setFeedback(''); setInvalid(false); setError(undefined); onClose();
     } catch (error) { setError(error); }
     finally { setBusy(false); onChanged(); }
   }
 
-  return <Modal opened onClose={onClose} title={t.actions[action]} size={400}
+  return <Modal opened onClose={close} title={t.actions[action]} size={PWA_CONFIRM_DIALOG_SIZE}
     closeOnEscape={!busy} closeOnClickOutside={!busy} withCloseButton={!busy} closeButtonProps={{ 'aria-label': t.common.close }}>
     <form onSubmit={submit} noValidate>
       <Stack gap="sm">
-        <p>{t.actions[`${action}Hint`]}</p>
+        <p className="pwa-confirm-description">{t.actions[`${action}Hint`]}</p>
         {'delivery' in confirmation && <p className="user-text"><strong>v{confirmation.delivery.version} · </strong>{confirmation.delivery.summary}</p>}
         {'machineName' in confirmation && <p className="user-text"><strong>{t.task.originalMachine} · </strong>{confirmation.machineName}</p>}
-        {action === 'rework' && <Textarea data-autofocus label={t.form.feedback} required value={feedback}
+        {action === 'rework' && <Textarea data-autofocus label={t.form.feedback} required value={feedback} disabled={busy}
           error={invalid ? feedback.trim() ? t.form.invalid : t.form.required : undefined}
           onChange={(event) => { setFeedback(event.currentTarget.value); setInvalid(false); }} />}
         <ErrorNotice error={error} />
-        <Group justify="flex-end" className="dialog-actions">
-          <Button variant="light" disabled={busy} onClick={onClose}>{t.common.dismiss}</Button>
-          <Button type="submit" color={action === 'cancel' || action === 'restart' ? 'red' : undefined} loading={busy}>{t.actions[action]}</Button>
-        </Group>
+        <div className="pwa-confirm-actions">
+          <Button type="submit" variant="filled" className={action === 'cancel' || action === 'restart' ? 'pwa-danger-confirm' : undefined} loading={busy}>{t.actions[action]}</Button>
+          <Button variant="default" disabled={busy} onClick={close}>{t.common.dismiss}</Button>
+        </div>
       </Stack>
     </form>
   </Modal>;

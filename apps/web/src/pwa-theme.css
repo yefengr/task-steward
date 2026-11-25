@@ -1,72 +1,32 @@
-/* 从 Pi Reach 0230224 的视觉角色中保留任务控制台使用的 token。 */
+/* 任务控制台独有的业务色与布局材质；公共 token 由基础包维护。 */
 :root {
-  color-scheme: light;
-  --pwa-bg: #fff;
-  --pwa-surface: #fff;
-  --pwa-panel: #f7f7f7;
   --pwa-card: var(--pwa-panel);
-  --pwa-hover: #ebebeb;
-  --pwa-selected: #e5e5e5;
-  --pwa-tonal: #ebebeb;
-  --pwa-ink: #2a2a2a;
-  --pwa-secondary: #606060;
-  --pwa-line: #e0e0e0;
-  --pwa-control-line: #878787;
-  --pwa-accent: #446396;
-  --pwa-accent-hover: #395687;
-  --pwa-on-accent: #fff;
   --pwa-accent-wash: #eaeff6;
-  --pwa-scrim: #00000047;
   --pwa-shadow-sidebar: 0 1px 2px #00000014, 0 2px 8px #0000000a;
   --pwa-complete: #347953;
   --pwa-complete-wash: #eaf3ec;
   --pwa-running: #90611f;
   --pwa-running-wash: #f9f2e6;
-  --pwa-error: #ae463e;
-  --pwa-error-wash: #f8ecea;
-  --pwa-font-ui: -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --pwa-font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --pwa-text-meta: 13px;
-  --pwa-text-list: 14px;
-  --pwa-text-body: 16px;
-  --pwa-text-title: 18px;
-  --pwa-text-page: 24px;
-  --pwa-radius-xs: 4px;
-  --pwa-radius-md: 8px;
-  --pwa-radius-lg: 12px;
-  --pwa-radius-xl: 16px;
-  --pwa-duration-modal-in: 400ms;
-  --pwa-duration-modal-out: 200ms;
 }
 
 :root[data-mantine-color-scheme='dark'] {
-  color-scheme: dark;
-  --pwa-bg: #1e1e1e;
-  --pwa-surface: #2d2d2d;
-  --pwa-panel: #282828;
   --pwa-card: var(--pwa-surface);
-  --pwa-hover: #353535;
-  --pwa-selected: #3a3a3a;
-  --pwa-tonal: #404040;
-  --pwa-ink: #f0f0f0;
-  --pwa-secondary: #bcbcbc;
-  --pwa-line: #464646;
-  --pwa-control-line: #848484;
-  --pwa-accent: #98b8e6;
-  --pwa-accent-hover: #a6c3ed;
-  --pwa-on-accent: #142237;
   --pwa-accent-wash: #2a3445;
-  --pwa-scrim: #0000008f;
   --pwa-shadow-sidebar: none;
   --pwa-complete: #95cba8;
   --pwa-complete-wash: #26392e;
   --pwa-running: #dfba77;
   --pwa-running-wash: #3d3528;
-  --pwa-error: #efa39b;
-  --pwa-error-wash: #422f30;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  :root { --pwa-duration-modal-in: 0ms; --pwa-duration-modal-out: 0ms; }
-  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0ms !important; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mantine-color-scheme]) {
+    --pwa-card: var(--pwa-surface);
+    --pwa-accent-wash: #2a3445;
+    --pwa-shadow-sidebar: none;
+    --pwa-complete: #95cba8;
+    --pwa-complete-wash: #26392e;
+    --pwa-running: #dfba77;
+    --pwa-running-wash: #3d3528;
+  }
 }

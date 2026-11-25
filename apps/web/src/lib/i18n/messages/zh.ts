@@ -39,9 +39,9 @@ export const zh: Messages = {
     active: '正在执行的任务', idle: '没有活动任务。', projects: '已登记的项目',
   },
   task: {
-    needsResponse: '请回原 Pi 会话回复', needsVerification: '待核对', reworkPending: '返修排队', createdByAgent: '由 Agent 创建',
+    needsResponse: '请回原 Pi 会话回复', responseFlag: '待回应', earlierProgress: '更早进展', needsVerification: '待核对', reworkPending: '返修排队', createdByAgent: '由 Agent 创建',
     discussionEndRequested: '已请求结束', questionHistory: '讨论记录',
-    attention: '需要处理', verificationHint: '执行租约已过期，等待启动器核对。',
+    management: '任务管理', attention: '需要处理', verificationHint: '执行租约已过期，等待启动器核对。',
     interruptedHint: '上次执行结束时没有交付，可重新安排。', goalSection: '目标与约定', decisions: '已记录决定',
     confirmed: '用户已确认', suggested: '待确认', progress: '当前进展', noProgress: '尚无进展回报。',
     delivery: '交付', noDelivery: '尚无交付。', history: '历史版本', latest: '最新版', accepted: '验收通过', reworked: '已要求返修',

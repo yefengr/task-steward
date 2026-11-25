@@ -22,7 +22,7 @@ export function ErrorNotice({ error, retry }: { error: unknown; retry?: () => vo
   const { t } = useI18n();
   if (!error) return null;
   return <Alert className="error-notice" variant="light" color="red" role="alert">
-    {describeError(error, t)}{retry && <Button variant="subtle" size="xs" onClick={retry}>{t.common.retry}</Button>}
+    {describeError(error, t)}{retry && <Button variant="transparent" onClick={retry}>{t.common.retry}</Button>}
   </Alert>;
 }
 
@@ -39,13 +39,13 @@ export function TaskTypeLabel({ task }: { task: Task }) {
 export function TaskFlags({ task }: { task: Task }) {
   const { t } = useI18n();
   return <>
-    {task.needsResponse && <span className="chip status-review"><MessageCircle size={13} />{t.task.needsResponse}</span>}
+    {task.needsResponse && <span className="chip status-review"><MessageCircle size={16} />{t.task.responseFlag}</span>}
     {task.discussionEndRequested && <span className="chip status-review">{t.task.discussionEndRequested}</span>}
-    {task.needsVerification && <span className="chip status-interrupted"><TriangleAlert size={13} />{t.task.needsVerification}</span>}
+    {task.needsVerification && <span className="chip status-interrupted"><TriangleAlert size={16} />{t.task.needsVerification}</span>}
   </>;
 }
 
 export function WaitReason({ task }: { task: Task }) {
   const { t } = useI18n();
-  return <span className="wait-reason"><Clock size={14} />{t.waiting[task.waiting ?? 'ready']}</span>;
+  return <span className="wait-reason"><Clock size={16} />{t.waiting[task.waiting ?? 'ready']}</span>;
 }

@@ -45,6 +45,7 @@ async function editWithConflict(page: Page, origin: string, taskPath: string) {
   await expect(form.getByLabel('目标', { exact: true })).toHaveValue('另一个客户端补充了目标');
   await form.getByRole('button', { name: '保存', exact: true }).click();
   await expect(form).toBeHidden();
+  await page.locator('summary').filter({ hasText: '目标与约定' }).click();
   await expect(page.getByText(localNotes)).toBeVisible();
 }
 
@@ -158,11 +159,9 @@ test('讨论结束请求不重复，且不会挡住返修后新一轮的结束�
   await page.reload();
   await expect(page.getByRole('heading', { name: discussionTitle })).toBeVisible();
   await expect(page.getByRole('button', { name: '结束讨论', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '需要处理' })).toHaveCount(0);
-  const history = page.locator('details.fold').filter({ hasText: '讨论记录' });
-  await expect(history).not.toHaveAttribute('open', '');
-  await history.locator('summary').click();
-  await expect(history.getByText(questionText)).toBeVisible();
+  await expect(page.getByRole('heading', { name: '需要处理' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: questionText })).toBeVisible();
+  await expect(page.getByText('请回原 Pi 会话回复', { exact: true }).last()).toBeVisible();
   await page.getByRole('button', { name: '结束讨论', exact: true }).click();
   await expect(page.getByText('已请求结束', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '结束讨论', exact: true })).toHaveCount(0);

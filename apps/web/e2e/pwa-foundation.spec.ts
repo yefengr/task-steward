@@ -25,7 +25,8 @@ test('生产页面：移动主区避让安全区，任务表单的电脑下拉�
   const screenLimit = await page.evaluate((inset) => window.innerWidth - inset, safeRight);
   const box = await select.boundingBox();
   const anchorRight = Math.round(box!.x + box!.width);
-  expect(anchorRight).toBeGreaterThan(screenLimit);
+  // 新公共Modal已先按安全区内缩，Select仍须与这个锚点对齐，而不是要求输入框先越过安全区。
+  expect(anchorRight).toBeLessThanOrEqual(screenLimit);
 
   await select.click();
   const option = page.getByRole('option', { name: '测试 Mac', exact: true });

@@ -39,9 +39,9 @@ export const en = {
     slots: 'Slots used', active: 'Active tasks', idle: 'No active tasks.', projects: 'Registered projects',
   },
   task: {
-    needsResponse: 'Reply in the original Pi session', needsVerification: 'Needs verification', reworkPending: 'Rework queued', createdByAgent: 'Created by Agent',
+    needsResponse: 'Reply in the original Pi session', responseFlag: 'Awaiting response', earlierProgress: 'Earlier updates', needsVerification: 'Needs verification', reworkPending: 'Rework queued', createdByAgent: 'Created by Agent',
     discussionEndRequested: 'End requested', questionHistory: 'Discussion history',
-    attention: 'Needs attention', verificationHint: 'The execution lease expired. Waiting for the launcher to verify the attempt.',
+    management: 'Task management', attention: 'Needs attention', verificationHint: 'The execution lease expired. Waiting for the launcher to verify the attempt.',
     interruptedHint: 'The last attempt ended without a delivery. You can schedule it again.', goalSection: 'Goal and agreements',
     decisions: 'Recorded decisions', confirmed: 'Confirmed by user', suggested: 'Unconfirmed', progress: 'Current progress', noProgress: 'No progress reported yet.',
     delivery: 'Delivery', noDelivery: 'No deliveries yet.', history: 'Version history', latest: 'Latest', accepted: 'Accepted', reworked: 'Rework requested',

@@ -1,5 +1,6 @@
 import { Alert, Button, Group, Modal, NativeSelect, Select, Stack, Textarea, TextInput } from '@mantine/core';
-import { useState } from 'react';
+import { useClearTaskViewState, useTaskViewState } from '../lib/task-view-state';
+import { useEffect, useRef } from 'react';
 import type { FormEvent } from 'react';
 import { titleSchema, textSchema, webCreateTaskRequestSchema, webUpdateTaskRequestSchema } from '@pi-steward/contract';
 import type { Task, WebMachine, WebProject } from '@pi-steward/contract';
@@ -32,12 +33,22 @@ interface FormProps {
 
 export function TaskForm(props: FormProps) {
   const { t } = useI18n();
-  const [baseTask, setBaseTask] = useState(props.initialTask);
-  const [draft, setDraft] = useState<Draft>(() => props.initialTask ? draftFrom(props.initialTask) : emptyDraft);
-  const [projectId, setProjectId] = useState(props.initialProject);
-  const [error, setError] = useState<unknown>();
-  const [busy, setBusy] = useState(false);
-  const [validate, setValidate] = useState(false);
+  const key = `form:${props.initialTask?.id ?? `new:${props.initialProject}`}`;
+  const initial = props.initialTask ? draftFrom(props.initialTask) : emptyDraft;
+  const [baseTask, setBaseTask] = useTaskViewState(key + ':base', props.initialTask);
+  const [draft, setDraftValue] = useTaskViewState<Draft>(key + ':draft', initial);
+  const [projectId, setProjectIdValue] = useTaskViewState(key + ':project', props.initialProject);
+  const [, setDirty] = useTaskViewState(key + ':dirty', false, true);
+  const setDraft: typeof setDraftValue = (next) => { setDirty(true); setDraftValue(next); };
+  const setProjectId = (id: string) => { setDirty(true); setProjectIdValue(id); };
+  const [error, setError] = useTaskViewState<unknown>(key + ':error', undefined);
+  const [busy, setBusy] = useTaskViewState(key + ':busy', false);
+  const [validate, setValidate] = useTaskViewState(key + ':validate', false);
+  const clear = useClearTaskViewState();
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  function reset() { clear(key + ':'); }
+  function close() { if (!busy) { reset(); props.onClose(); } }
   const middlewares = useFloatingSafeMiddlewares();
   const conflict = Boolean(baseTask && props.currentTask && baseTask.version !== props.currentTask.version)
     || (error instanceof WebError && error.code === 'conflict');
@@ -67,17 +78,21 @@ export function TaskForm(props: FormProps) {
         ? await api.edit(baseTask.id, webUpdateTaskRequestSchema.parse({ version: baseTask.version,
           ...Object.fromEntries(fields.map((field) => [field, draft[field]])) }))
         : await api.create(webCreateTaskRequestSchema.parse({ ...draft, projectId }));
-      props.onSaved(result.task);
+      reset();
+      // 旧页面可以结束所属目标的草稿，但不能通过旧回调抢走当前路由。
+      props.onClose();
+      if (mounted.current) props.onSaved(result.task);
     } catch (error) {
       setError(error);
-      if (error instanceof WebError && error.code === 'conflict') props.onConflict?.();
-    } finally { setBusy(false); }
+      setBusy(false);
+      if (mounted.current && error instanceof WebError && error.code === 'conflict') props.onConflict?.();
+    }
   }
 
-  return <Modal opened onClose={props.onClose} title={baseTask ? t.common.editTask : t.common.newTask}
+  return <Modal opened onClose={close} title={baseTask ? t.common.editTask : t.common.newTask}
     closeButtonProps={{ 'aria-label': t.common.close }} closeOnClickOutside={!busy} closeOnEscape={!busy} withCloseButton={!busy}>
     <form onSubmit={submit} noValidate>
-      <Stack gap="sm">
+      <fieldset disabled={busy} className="task-form-fields"><Stack gap="sm">
         {!baseTask && <NativeSelect label={t.common.projects} value={projectId} onChange={(event) => setProjectId(event.currentTarget.value)}
           data={props.projects.map((project) => ({ value: project.id, label: project.name }))} />}
         <TextInput label={t.form.title} required data-autofocus value={draft.title} error={titleError} onChange={(event) => {
@@ -110,16 +125,16 @@ export function TaskForm(props: FormProps) {
                   : props.currentTask![field] || t.common.unknown} />)}</dl>
           </details>}
           {!currentClosed && props.currentTask && props.currentTask.version !== baseTask?.version &&
-            <Button variant="subtle" size="sm" onClick={useLatest}>{t.errors.useLatest}</Button>}
+            <Button variant="transparent" onClick={useLatest}>{t.errors.useLatest}</Button>}
         </Alert>}
         {!conflict && <ErrorNotice error={error} />}
-        <Group justify="flex-end" className="dialog-actions">
-          <Button variant="light" onClick={props.onClose} disabled={busy}>{t.common.dismiss}</Button>
+        <Group justify="flex-end" className="pwa-confirm-actions">
           <Button type="submit" loading={busy} disabled={conflict || currentClosed || fields.length === 0 || !projectId}>
             {baseTask ? t.common.save : t.common.create}
           </Button>
+          <Button variant="default" onClick={close} disabled={busy}>{t.common.dismiss}</Button>
         </Group>
-      </Stack>
+      </Stack></fieldset>
     </form>
   </Modal>;
 }

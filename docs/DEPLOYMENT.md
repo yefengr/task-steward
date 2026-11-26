@@ -1,5 +1,7 @@
 # Task Steward 部署与 Mac 接入
 
+本文是当前安装与运维入口，命令供已获相应授权的操作者使用；阅读文档或完成本地验证不授予部署、发布或修改公共运行时的权限。产品与会话规则见 [CONTEXT](CONTEXT.md)，当前模块见 [ARCHITECTURE](ARCHITECTURE.md)，各事项状态只看 [ROADMAP](ROADMAP.md)。
+
 ## 本地试用或自托管
 
 以下构建命令用于本地试用或独立自托管，不用于更新 Steward 的正式站点。自托管时，从仓库根目录构建镜像。
@@ -71,12 +73,11 @@ SSH 别名应使用配置了固定部署入口的密钥。应急命令不会从�
 
 在 npm 将 `@yefengr/steward` 的 Trusted Publisher 绑定到 `yefengr/task-steward`、`release.yml` 和 `npm-release` 环境，取消允许直接 `npm publish`，不向工作流提供 npm Token。待审包不会成为 `latest`。维护者在 npm 的 **Staged Packages** 核对包、版本和 Actions 摘要中的源码提交；平台与扩展联动时，先核对线上平台已兼容该包，再用 2FA 批准。批准后核对公开 registry 中的版本和 `latest`。
 
-### 首次对齐线上 0.2.1
+### 版本暂停与历史切换
 
-1. 在 npm 确认 Trusted Publisher 配置并取消直接发布授权；确认旧流程没有正在发布的任务。先合入新的工作流，暂不纳入 `a8470af`，也不要批准平台上线。
-2. 在维护者账户查 **Staged Packages**（也可用已认证的 `npm stage list @yefengr/steward`），再查公开 registry。公开 registry 返回 404 只能说明未公开，不能证明没有待审包。如果 `0.2.1` 已待审，或暂时无法确认，在 GitHub Actions 的仓库变量设 `STEWARD_NPM_HOLD_VERSION=0.2.1`；新工作流仍可验证和打包，但不会为该版本提交待审。若已有待审包，先核对它的来源和兼容性，不要重传或直接批准。
-3. 让 `main` 纳入线上 `a8470af`，并保留该提交 ID 在 `main` 历史中，不把它 squash 或 rebase 成另一个提交。只追平仓库时不批准平台部署；保留构建和隔离预检证据。下次上线前再核对实际线上容器和 `main` 的祖先关系。
-4. 手动运行取的是当时 `main` 上启动器清单里的版本。先确认它仍是要发的 `0.2.1`，并确认该版本既未待审也未公开，再解除版本暂停并勾选 `stage`；若已公开，流程会跳过。npm 的最终批准与平台上线分别操作。
+发布结果未知时，先由维护者查询 npm 的 **Staged Packages**（或已认证的 `npm stage list @yefengr/steward`）和公开 registry。404 只能说明未公开，不能证明没有待审包，不应直接重传或批准。需要暂停某个版本时，仓库变量 `STEWARD_NPM_HOLD_VERSION` 填待暂停的确切版本；验证与打包仍可运行。解除前重新核对目标版本、待审状态与兼容性。
+
+早期 `0.2.1` 切换曾要求先对齐发布门禁，再让 `main` 保留 `a8470af` 的原提交关系。本地整合基线现已包含该提交，不再执行旧的「暂不纳入」步骤；这不证明旧待审版本或线上状态已核对。每次上线仍须比较实际线上源码与本次候选，不能拿历史版本号代替现场检查。npm 批准与平台上线始终分别授权。
 
 ## 登记 Mac
 
@@ -122,4 +123,12 @@ stew pair --proxy system                  # 恢复跟随系统
 3. 启动器可用 `run` 前台运行，或由操作者运行 `node apps/launcher/dist/index.js install` 安装用户级 LaunchAgent。`status` 检查本机状态，`uninstall` 停止并移除对应 LaunchAgent。
 4. 在平台电脑页确认电脑在线且项目已登记。安排一项测试任务并在 Pi Reach 用显示名称找到会话。Mac 本机可用 `tmux -L steward ls` 查找会话。
 
-撤销机器时使用同一管理入口运行 `machine:revoke <名称>`。回报、交付、返修等验收步骤见[首版实施方案](plans/active/20261119-first-version-implementation.md#123-真机验收宿主机-mac)。
+撤销机器时使用同一管理入口运行 `machine:revoke <名称>`。首版验收标准与当时预验收快照保留在[已归档实施方案](plans/completed/20261119-first-version-implementation.md#123-真机验收宿主机-mac)，完成状态以 ROADMAP 为准，不为补文档重跑已确认的验收。
+
+## 会话定位与配套升级
+
+工作树迁移后，Pi 应在实际目标会话读取任务并登记目录、分支和会话定位。返修复用上次交付的同机现场；找不到工作树或 JSONL 时先核对并暂停，不回退登记目录、不创建空会话。
+
+网页的「重启 Pi 会话」「恢复原会话」要求原 Mac 在线、启动器支持且能验证精确目录和会话文件。成功后向原会话发送新消息继续；普通重启和恢复不会自动重放旧指令，返修才带入新反馈。离线时这两项操作不会排队执行，不能与可保留离线请求的「结束讨论」混为一谈。
+
+平台、启动器和扩展的升级需配套核对；旧进程可能仍加载旧扩展，npm 已发布也不表示已运行新版。升级按用户实际安装前缀及 Pi 原生重载／重启流程操作，不为刷新版本直接关闭正式 tmux server。历史事故与配套边界见[会话恢复回归记录](plans/completed/20261124-session-locator-regression.md)。本地隔离测试不覆盖 LaunchAgent 安装升级或 Pi Reach 连接。

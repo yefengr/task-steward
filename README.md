@@ -1,42 +1,56 @@
 # Task Steward — 跨电脑 Agent 任务管家
 
-Task Steward 是面向个人的跨电脑任务清单与执行协调系统。你在清单里安排任务，项目所在的 Mac 自动领取并启动 Agent 执行。你可以在同一条任务记录里查看进展、接收交付和完成验收。首版接入 Pi，Claude Code 接入在规划中。
+Task Steward 是面向个人的任务清单与执行协调系统。你在工作台安排任务，项目所在 Mac 自动领取并启动 Pi；你在原 Pi 会话交流，在任务记录中查看进展、交付和验收。平台不接模型、不托管 Agent 进程，源码和工作现场留在执行电脑。Claude Code 接入仍在规划中。
 
 ## 当前范围
 
-首版的任务平台、网页、Mac 启动器和 Pi 扩展可在本机验证。目标服务器和真实 Pi 的联调进度见下方路线图。
+首版平台、网页、Mac 启动器和 Pi 接入已完成，Mac 真机验收已获用户确认。后续迭代的交付、用户验收、合并、发包和部署分别记录，准确状态只看 [ROADMAP](docs/ROADMAP.md)，不能从本地测试通过推定线上版本。
+
+当前代码支持实现／讨论任务、明确提问后的回复提醒、普通 Pi 任务代管、实际工作现场登记与会话重启／恢复。讨论由用户主动请求结束；提醒仅在明确等待回复满三分钟后显示。依赖调度、验收积压门禁、Web Push 和 Claude Code 仍是候选，不是当前能力。使用边界见 [CONTEXT](docs/CONTEXT.md)。
 
 ## 文档入口
 
 | 文档 | 职责 |
 | --- | --- |
-| [产品背景与术语](docs/CONTEXT.md) | 说明要解决的问题、基本思路、自建清单的使用方式、各角色及领域概念 |
-| [首版技术方案](docs/plans/active/20261112-initial-design.md) | 保存已确认的职责边界与决策、任务状态、领取与执行、两种 Agent 的接入、Git、通知，并列出技术基线、真机验证、实施顺序与待设计项 |
-
-产品背景以 CONTEXT 为准。首版技术方案保存产品决策，[首版实施方案](docs/plans/active/20261119-first-version-implementation.md)说明工程范围和验收标准。当前里程碑见 [ROADMAP](docs/ROADMAP.md)，后续候选见 [BACKLOG](docs/BACKLOG.md)。
+| [CONTEXT](docs/CONTEXT.md) | 产品背景、术语、当前使用路径与权限边界 |
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | 当前模块、直接消费者、执行及会话链路 |
+| [DEPLOYMENT](docs/DEPLOYMENT.md) | 安装、配对、部署、发布、备份与恢复 |
+| [ROADMAP](docs/ROADMAP.md) | 已确定事项及状态的唯一权威来源；Steward 仅作辅助 |
+| [BACKLOG](docs/BACKLOG.md) | 尚未确认开发的候选事项 |
+| [首版设计](docs/plans/completed/20261112-initial-design.md)、[首版实施方案](docs/plans/completed/20261119-first-version-implementation.md) | 历史产品决策、评审、分期与验收依据，不作当前操作入口 |
+| [会话恢复回归记录](docs/plans/completed/20261124-session-locator-regression.md) | 历史事故、人工恢复参照与隔离验证边界 |
+| [任务控制台原型](docs/prototypes/20261119-task-console/index.html)、[Pi 启动预研](spikes/pi-launch/README.md) | 历史界面评审与真机预研材料，不冒充当前实现 |
 
 ## 本地开发
 
-在仓库根目录用 Node 24.20.0 或同一 Node 24 系列的更高版本、pnpm 11.20.0 运行 `pnpm install --frozen-lockfile`，再运行 `pnpm verify`。构建后可运行 `node scripts/smoke-launcher.mjs` 验证假 Agent 和 tmux 链路，或运行 `pnpm --filter @pi-steward/web test:e2e` 执行浏览器测试。要验证真实 Pi 的两种讨论收尾入口，可运行 `node scripts/smoke-launcher.mjs --real-pi <Pi 可执行文件的绝对路径>`；该命令使用独立 tmux、本机测试平台和确定性测试模型，不调用远端模型。工作树迁移后的会话定位可运行 `node scripts/smoke-session-locator.mjs <Pi 可执行文件的绝对路径>` 验证，覆盖重启、恢复、返修及现场缺失；[事故与回归说明](docs/plans/active/20261124-session-locator-regression.md)保留人工恢复参照。发布及启动器配置见[部署与 Mac 接入](docs/DEPLOYMENT.md)。
+所有命令从仓库根目录执行：
+
+- 使用 Node 24.20.0 或同一 Node 24 系列的更高版本、pnpm 11.20.0；版本真源为 `.node-version` 与根 `package.json`。
+- macOS 上需要已安装 Xcode 或 Xcode Command Line Tools。`platform-http` 会用 `xcrun`、Swift、`lipo`、`codesign` 构建双架构原生 HTTP 辅助程序；这也是根 `typecheck`、`test` 和 `verify` 的前置，不只打包时才需要。
+- 运行启动器／Pi 冒烟还需要 `tmux`、`git`，真实 Pi 冒烟需要已有的 Pi 可执行文件。浏览器测试使用已安装的 Google Chrome，也可通过 `STEWARD_TEST_CHROME` 指定已有兼容浏览器路径，见 `apps/web/playwright.config.ts`。
+
+```sh
+pnpm install --frozen-lockfile
+pnpm verify
+```
+
+`verify` 依次执行全量构建、类型检查、lint 和各包测试。分开检查可运行 `pnpm build`、`pnpm typecheck`、`pnpm lint`、`pnpm test`；其中 `typecheck` 与 `test` 均先构建 contract 和 platform-http。直接跑子包测试前也须先构建依赖，不能把缺少 `dist` 当作代码回归。
+
+完成构建后按改动风险选择额外验证：
+
+| 命令 | 覆盖与边界 |
+| --- | --- |
+| `node scripts/smoke-launcher.mjs` | 隔离平台、假 Agent 与 tmux 的领取／交付／返修链路；没有 tmux 会跳过，不等于通过 |
+| `pnpm --filter @pi-steward/web test:e2e` | 隔离平台上的真实浏览器任务流程、布局与交互 |
+| `node scripts/smoke-launcher.mjs --real-pi <Pi绝对路径>` | 真实 Pi 的两种讨论结束入口；独立 tmux、本机平台、确定性测试模型，不调用远端模型 |
+| `node scripts/smoke-session-locator.mjs <Pi绝对路径>` | 真实 Pi 工作树迁移后的重启、恢复、返修及现场缺失；覆盖边界见[回归记录](docs/plans/completed/20261124-session-locator-regression.md) |
+
+这些隔离测试不替代 LaunchAgent 安装升级、Pi Reach 连接和正式部署验收，也不要求为补文档重跑已完成的验收。发布与 Mac 接入操作只使用 [DEPLOYMENT](docs/DEPLOYMENT.md)，未经授权不推送、发布或部署。
 
 ## 前端公共规范
 
-网页精确消费公开 npm `@yefengr/pwa-foundation@0.0.4` 的安全区、主题/控件/表面、通用动效、触控按压与系统字号读取，不另维护一份公共设计规范。共享颜色、字体、间距、表面、确认顺序、关闭回焦与可访问性引用包内 [DESIGN.md](https://github.com/yefengr/pi-reach/blob/main/packages/pwa-foundation/DESIGN.md)，消费方法见包 [README](https://github.com/yefengr/pi-reach/blob/main/packages/pwa-foundation/README.md)。DESIGN.md 自 `0.0.3` 随包分发，上游源码已合入；旧版 `0.0.2` 不含此文档，不回写旧发布制品。
+网页精确消费公开 npm `@yefengr/pwa-foundation`，版本以 `apps/web/package.json` 和锁文件为准，不另维护公共设计规范。共享颜色、字体、间距、表面、确认顺序、关闭回焦与可访问性引用包内 [DESIGN.md](https://github.com/yefengr/pi-reach/blob/main/packages/pwa-foundation/DESIGN.md)，消费方法见包 [README](https://github.com/yefengr/pi-reach/blob/main/packages/pwa-foundation/README.md)。DESIGN.md 自 `0.0.3` 随包分发；旧版 `0.0.2` 不含此文档，不回写旧发布制品。
 
-宿主负责 Provider 与真实 Portal 作用域、按布局生成确认区 DOM、Modal 关闭生命周期、busy 门禁和有效焦点后备。任务表单与确认入口保持既有关闭/草稿保护；品牌、业务状态映射、权限/API、路由/history、任务草稿的内存持久期与 PWA 策略不变。
+宿主负责 Provider 与真实 Portal 作用域、按布局生成确认区 DOM、Modal 关闭生命周期、busy 门禁和有效焦点后备。任务表单与确认入口保持既有关闭／草稿保护；品牌、业务状态映射、权限／API、路由／history、任务草稿的内存持久期与 PWA 策略由宿主维护。
 
-导航内提供系统／浅色／深色外观与三档字号，能实测系统字号时增加跟随系统；偏好存储键和启动/返回时恢复由宿主维护，不扩建完整设置框架。导航 Drawer 与按钮/导航行/summary 显式接入公共过渡和按压；发丝线与表面按公共角色消费，控件仍保持独立轮廓。当前没有 Menu/Popover 无罩浮层，原生下拉不安装外点按保护。复制保留真实成功/失败反馈，原生 details/summary 保持键盘披露语义，不新增 Mantine 薄包装或业务折叠层。
-
-## 阅读重点
-
-本系统是一个任务台账，加上每台 Mac 上自动领取任务的启动器。平台部署在私人服务器，以单 Docker 容器运行，负责清单、领取条件、交付记录和通知，不接模型，也不托管 Agent 进程。任务怎么完成交给项目 Agent 和项目已有规范，源码与工作现场保留在执行电脑。
-
-创建任务时可选择「实现」（默认）或「讨论」。讨论不会在一轮结束时自动交付；在原 Pi 会话发送「结束讨论」，或在工作台点击「结束讨论」，Pi 会保存结论和未决事项后退出。执行电脑离线时，工作台保留结束请求，恢复连接后再处理。两种任务都只在 Pi 明确提出问题且等待满 3 分钟时显示一条提醒；在原会话回复即可撤下提醒，聊天不会同步到工作台。
-
-启动器按本机空闲名额自动领取任务。Pi 已确认在后台 tmux 会话中以交互模式启动，Claude Code 的启动方式待验证。名额等于本机运行中的 Agent 进程数，默认 1；Agent 等待用户回应时进程仍在运行并占用名额，进程退出即释放。Pi 经任务扩展、Claude Code 经通用技能回报进展、问题、决定与交付，Claude Code 经 ccx 启动并通过系统提示词获得任务背景。Agent 保存交付时，任务进入待验收；启动器确认进程退出后才释放名额。需要修改时用户发起返修，任务优先重新领取。进程退出而没有交付时任务进入已中断，由用户决定是否恢复或重新安排。
-
-Pi 任务可在详情中手动「重启 Pi 会话」或「恢复原会话」。两者都需要原 Mac 在线、启动器支持该功能，且仍能找到原工作目录与会话记录。成功后在 Pi Reach 向原对话发送新消息继续；「重新安排」则开启新执行，不接旧对话。离线时不会排队执行重启或恢复。
-
-对话通过各 Agent 的远程入口进行：任务记录执行电脑、Agent 类型与会话标识，Pi 会话在 Pi Reach 打开，Claude Code 会话经 Remote Control 打开，精确会话深链作为后续增强。首版先接 Pi，任务在创建时指定 Agent。Agent 还可以在用户要求时代为查看、创建和修改任务，安排开始与验收仍由用户在平台操作。依赖默认等待前项验收通过，也可选择交付后继续；待验收超过上限时暂停领取普通任务，返修不受限制。
-
-Pi 的 tmux 启动、退出与返修恢复已经过预研真机验证。首个可用版本按路线图开发平台、Mac 启动器和 Pi 接入，Claude Code 的验证随其接入进行。
+导航提供系统／浅色／深色外观与三档字号，能实测系统字号时增加跟随系统；偏好存储和启动／返回时恢复由宿主维护，不扩建完整设置框架。Drawer 与按钮／导航行／summary 显式接入公共过渡和按压，发丝线与表面按公共角色消费，控件保持独立轮廓。当前没有 Menu／Popover 无罩浮层，原生下拉不安装外点按保护。复制保留真实成功／失败反馈，原生 details／summary 保持键盘披露语义，不新增 Mantine 薄包装或业务折叠层。历史复制来源及完整 MIT 许可见 [THIRD_PARTY_NOTICES](apps/web/THIRD_PARTY_NOTICES.md)。

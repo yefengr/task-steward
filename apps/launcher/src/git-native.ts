@@ -36,7 +36,9 @@ async function clean(root: string) {
 async function unused(root: string) {
   let output: string;
   try {
-    output = (await run('/usr/sbin/lsof', ['-F', 'p', '+D', root], { timeout: 5_000, maxBuffer: 1024 * 1024 })).stdout;
+    // macOS 使用固定系统入口；Linux CI 的系统 lsof 位于 /usr/bin，仍失败关闭、不跳过占用核对。
+    const command = process.platform === 'darwin' ? '/usr/sbin/lsof' : '/usr/bin/lsof';
+    output = (await run(command, ['-F', 'p', '+D', root], { timeout: 5_000, maxBuffer: 1024 * 1024 })).stdout;
   } catch (error) {
     const value = error as { code?: number; stdout?: string; stderr?: string };
     // lsof 在部分进程不可见时仍可能以 1 返回已发现的进程；已有占用证据不能丢弃。

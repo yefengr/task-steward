@@ -30,6 +30,7 @@ interface FormProps {
   initialProject: string;
   initialTask?: Task;
   currentTask?: Task;
+  hasAttempts?: boolean;
   onClose: () => void;
   onSaved: (task: Task) => void;
   onConflict?: () => void;
@@ -88,7 +89,8 @@ export function TaskForm(props: FormProps) {
   const selectedProject = props.projects.find((project) => project.id === projectId);
   const defaultBranch = selectedProject?.gitSettings?.baseBranch ?? null;
   const showBaseBranch = (baseTask?.type ?? draft.type) === 'implementation';
-  const started = Boolean(props.currentTask) && props.currentTask!.status !== 'unscheduled' && props.currentTask!.status !== 'queued';
+  const started = Boolean(props.hasAttempts) || (Boolean(props.currentTask)
+    && props.currentTask!.status !== 'unscheduled' && props.currentTask!.status !== 'queued');
   // 领取时尚未选分支的任务允许显式补第一次选择；已有选择或 Git 快照仍保持锁定。
   const firstSelection = started && !props.currentTask!.git && props.currentTask!.baseBranch == null;
   const baseBranchLocked = Boolean(props.currentTask?.git) || (started && !firstSelection);

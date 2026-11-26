@@ -115,7 +115,8 @@ export default function TaskDetail({ detail, project, machines, onChanged }: {
     <ContextSections detail={detail} />
     <DiscussionHistory questions={detail.questions.filter((question) => question.status !== 'open')} />
     <Records attempts={detail.attempts} events={detail.events} />
-    {editing && <TaskForm initialTask={editing} currentTask={task} initialProject={task.projectId} projects={project ? [project] : []}
+    {editing && <TaskForm initialTask={editing} currentTask={task} hasAttempts={detail.attempts.length > 0}
+      initialProject={task.projectId} projects={project ? [project] : []}
       machines={machines} focusFallback={focusFallback} onConflict={onChanged} onClose={() => setEditing(undefined)}
       onSaved={(saved) => { setSavedTask(saved); setEditing(undefined); onChanged(); }} />}
   </>;

@@ -111,6 +111,41 @@ it('领取时项目基准为null不自动继承后来默认；显式首次选择
   expect((await context(x, attempt.id)).gitSettings).toEqual({ baseBranch: 'main', syncBeforeStart: false });
 });
 
+it.each(['running', 'interrupted'] as const)('升级前已有尝试的 %s 任务可显式首次补选基准并同事务锁定当前同步', async (status) => {
+  const x = await setup();
+  await x.heartbeat(3);
+  const task = await x.create();
+  await x.action(task.id, 'schedule');
+  const attempt = await x.claimed();
+  // 模拟升级前遗留数据形状：尝试已存在，冻结标记与基准为空，且没有 Git 快照。
+  x.store.run('UPDATE tasks SET status=?, base_branch=NULL, git_sync_before_start=NULL WHERE id=?', status, task.id);
+  if (status === 'interrupted') x.store.run("UPDATE attempts SET ended_at=?, result='interrupted' WHERE id=?", x.now(), attempt.id);
+  expect(x.store.get('SELECT 1 FROM task_git WHERE task_id=?', task.id)).toBeUndefined();
+  expect(x.store.get<{ base_branch: string | null; git_sync_before_start: number | null }>(
+    'SELECT base_branch, git_sync_before_start FROM tasks WHERE id=?', task.id)).toEqual({ base_branch: null, git_sync_before_start: null });
+  expect((await settings(x, { baseBranch: 'main', syncBeforeStart: false, version: 1 })).status).toBe(200);
+  const stale = (await x.detail(task.id)).task;
+  await errorCode(await x.web(`/tasks/${task.id}`, { baseBranch: 'main', version: stale.version - 1 }, 'PATCH'), 409, 'conflict');
+  expect((await x.web(`/tasks/${task.id}`, { baseBranch: 'main', version: stale.version }, 'PATCH')).status).toBe(200);
+  expect(x.store.get<{ base_branch: string | null; git_sync_before_start: number | null }>(
+    'SELECT base_branch, git_sync_before_start FROM tasks WHERE id=?', task.id)).toEqual({ base_branch: 'main', git_sync_before_start: 0 });
+  const chosen = (await x.detail(task.id)).task;
+  await errorCode(await x.web(`/tasks/${task.id}`, { baseBranch: 'develop', version: chosen.version }, 'PATCH'), 409, 'conflict');
+  await errorCode(await x.web(`/tasks/${task.id}`, { baseBranch: null, version: chosen.version }, 'PATCH'), 409, 'conflict');
+  expect((await x.detail(task.id)).task.baseBranch).toBe('main');
+});
+
+it('始终未开始的任务保持原有基准编辑行为，不提前写入同步标记', async () => {
+  const x = await setup();
+  await x.heartbeat(3);
+  const task = await x.create();
+  const edited = await read(c.webTaskMutationResponseSchema, await x.web(`/tasks/${task.id}`, { baseBranch: 'release', version: task.version }, 'PATCH'));
+  expect(edited.task.baseBranch).toBe('release');
+  expect(x.store.get<{ git_sync_before_start: number | null }>('SELECT git_sync_before_start FROM tasks WHERE id=?', task.id)?.git_sync_before_start).toBeNull();
+  const cleared = await read(c.webTaskMutationResponseSchema, await x.web(`/tasks/${task.id}`, { baseBranch: null, version: edited.task.version }, 'PATCH'));
+  expect(cleared.task.baseBranch).toBeNull();
+});
+
 it('prepare拒绝未配置/讨论任务与重复分支，现场必须专属linked根且交付精确匹配冻结base', async () => {
   const x = await setup();
   await x.heartbeat(3);

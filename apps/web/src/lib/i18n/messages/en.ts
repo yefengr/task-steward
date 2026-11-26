@@ -2,7 +2,8 @@ export const en = {
   common: {
     projects: 'Projects', machines: 'Machines', newTask: 'New task', editTask: 'Edit task', back: 'Back',
     openMenu: 'Open menu', close: 'Close', login: 'Sign in', logout: 'Sign out', language: 'Switch language', languageOption: '中文',
-    theme: 'Appearance', system: 'System', light: 'Light', save: 'Save', create: 'Create task', dismiss: 'Back',
+    theme: 'Appearance', system: 'System', light: 'Light', dark: 'Dark',
+    textSize: 'Text size', standard: 'Standard', large: 'Large', xlarge: 'Extra large', save: 'Save', create: 'Create task', dismiss: 'Back',
     loading: 'Loading…', retry: 'Retry', unknown: '—', notFound: 'Page not found', goHome: 'Back to home',
   },
   auth: { hint: 'Enter the access password to open the task console.', password: 'Access password', incorrect: 'The access password is incorrect.' },

@@ -4,7 +4,8 @@ export const zh: Messages = {
   common: {
     projects: '项目', machines: '电脑', newTask: '新建任务', editTask: '编辑任务', back: '返回',
     openMenu: '打开菜单', close: '关闭', login: '登录', logout: '退出登录', language: '切换语言', languageOption: 'English',
-    theme: '外观', system: '跟随系统', light: '浅色', save: '保存', create: '创建任务', dismiss: '返回',
+    theme: '外观', system: '跟随系统', light: '浅色', dark: '深色',
+    textSize: '字号', standard: '标准', large: '大', xlarge: '特大', save: '保存', create: '创建任务', dismiss: '返回',
     loading: '正在加载…', retry: '重试', unknown: '—', notFound: '找不到此页面', goHome: '返回首页',
   },
   auth: { hint: '输入访问密码，进入任务控制台。', password: '访问密码', incorrect: '访问密码不正确。' },

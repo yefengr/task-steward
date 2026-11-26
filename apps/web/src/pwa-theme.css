@@ -1,32 +1,12 @@
-/* 任务控制台独有的业务色与布局材质；公共 token 由基础包维护。 */
+/* 基础视觉取值来自公共包；任务状态如何映射仍由本应用决定。 */
 :root {
-  --pwa-card: var(--pwa-panel);
   --pwa-accent-wash: #eaeff6;
-  --pwa-shadow-sidebar: 0 1px 2px #00000014, 0 2px 8px #0000000a;
-  --pwa-complete: #347953;
-  --pwa-complete-wash: #eaf3ec;
-  --pwa-running: #90611f;
-  --pwa-running-wash: #f9f2e6;
+  --pwa-complete: var(--pwa-green);
+  --pwa-complete-wash: var(--pwa-green-wash);
+  --pwa-running: var(--pwa-amber);
+  --pwa-running-wash: var(--pwa-amber-wash);
 }
-
-:root[data-mantine-color-scheme='dark'] {
-  --pwa-card: var(--pwa-surface);
-  --pwa-accent-wash: #2a3445;
-  --pwa-shadow-sidebar: none;
-  --pwa-complete: #95cba8;
-  --pwa-complete-wash: #26392e;
-  --pwa-running: #dfba77;
-  --pwa-running-wash: #3d3528;
-}
-
+:root[data-mantine-color-scheme='dark'] { --pwa-accent-wash: #2a3445; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-mantine-color-scheme]) {
-    --pwa-card: var(--pwa-surface);
-    --pwa-accent-wash: #2a3445;
-    --pwa-shadow-sidebar: none;
-    --pwa-complete: #95cba8;
-    --pwa-complete-wash: #26392e;
-    --pwa-running: #dfba77;
-    --pwa-running-wash: #3d3528;
-  }
+  :root:not([data-mantine-color-scheme]) { --pwa-accent-wash: #2a3445; }
 }

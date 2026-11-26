@@ -21,11 +21,11 @@ Task Steward 是面向个人的跨电脑任务清单与执行协调系统。你�
 
 ## 前端公共规范
 
-网页精确消费公开 npm `@yefengr/pwa-foundation@0.0.3` 的安全区、主题与 Mantine 控件，不另维护一份公共设计规范。共享颜色、字体、间距、表面、确认顺序、关闭回焦与可访问性引用包内 [DESIGN.md](https://github.com/yefengr/pi-reach/blob/main/packages/pwa-foundation/DESIGN.md)，消费方法见包 [README](https://github.com/yefengr/pi-reach/blob/main/packages/pwa-foundation/README.md)。DESIGN.md 自 `0.0.3` 随包分发，上游源码已合入；旧版 `0.0.2` 不含此文档，不回写旧发布制品。
+网页精确消费公开 npm `@yefengr/pwa-foundation@0.0.4` 的安全区、主题/控件/表面、通用动效、触控按压与系统字号读取，不另维护一份公共设计规范。共享颜色、字体、间距、表面、确认顺序、关闭回焦与可访问性引用包内 [DESIGN.md](https://github.com/yefengr/pi-reach/blob/main/packages/pwa-foundation/DESIGN.md)，消费方法见包 [README](https://github.com/yefengr/pi-reach/blob/main/packages/pwa-foundation/README.md)。DESIGN.md 自 `0.0.3` 随包分发，上游源码已合入；旧版 `0.0.2` 不含此文档，不回写旧发布制品。
 
-宿主负责 Provider 与真实 Portal 作用域、按布局生成确认区 DOM、Modal 关闭生命周期、busy 门禁和有效焦点后备。本轮仅对齐任务表单与任务确认入口；品牌、业务状态映射、权限/API、路由/history、任务草稿的内存持久期与 PWA 策略不变。
+宿主负责 Provider 与真实 Portal 作用域、按布局生成确认区 DOM、Modal 关闭生命周期、busy 门禁和有效焦点后备。任务表单与确认入口保持既有关闭/草稿保护；品牌、业务状态映射、权限/API、路由/history、任务草稿的内存持久期与 PWA 策略不变。
 
-其余差异不在本轮扩建设置页：字号三档已有公共 token，但偏好入口与系统字号读取尚需接线或后续提取；外观包已支持系统／浅色／深色，现有入口缺项属于宿主接线；复制与基本折叠复用 Mantine，反馈和动效后续按公共规范对齐。细分隔、发丝线检测与表面角色留待后续视觉基础，通用动效读取、触控按压撤销和外点按保护留待后续交互辅助；这些不代表 `0.0.2` 已自动提供。
+导航内提供系统／浅色／深色外观与三档字号，能实测系统字号时增加跟随系统；偏好存储键和启动/返回时恢复由宿主维护，不扩建完整设置框架。导航 Drawer 与按钮/导航行/summary 显式接入公共过渡和按压；发丝线与表面按公共角色消费，控件仍保持独立轮廓。当前没有 Menu/Popover 无罩浮层，原生下拉不安装外点按保护。复制保留真实成功/失败反馈，原生 details/summary 保持键盘披露语义，不新增 Mantine 薄包装或业务折叠层。
 
 ## 阅读重点
 

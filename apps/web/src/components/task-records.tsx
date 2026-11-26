@@ -38,7 +38,7 @@ export function Deliveries({ deliveries }: { deliveries: Delivery[] }) {
     <h2>{t.task.delivery}</h2>
     {latest ? <DeliveryCard delivery={latest} latest /> : <p className="muted">{t.task.noDelivery}</p>}
     {older.length > 0 && <details className="fold">
-      <summary><ChevronRight size={16} />{t.task.history} <span className="muted">{older.length}</span></summary>
+      <summary className="pwa-press-row"><ChevronRight size={16} />{t.task.history} <span className="muted">{older.length}</span></summary>
       <div className="fold-body">{older.map((delivery) => <DeliveryCard key={delivery.id} delivery={delivery} />)}</div>
     </details>}
   </section>;
@@ -48,7 +48,7 @@ export function DiscussionHistory({ questions }: { questions: WebTaskDetailRespo
   const { t } = useI18n();
   if (!questions.length) return null;
   return <details className="detail-section fold">
-    <summary><ChevronRight size={16} />{t.task.questionHistory} <span className="muted">{questions.length}</span></summary>
+    <summary className="pwa-press-row"><ChevronRight size={16} />{t.task.questionHistory} <span className="muted">{questions.length}</span></summary>
     <div className="fold-body">
       {questions.toReversed().map((question) => <div className="decision" key={question.id}>
         <span className={`chip ${question.status === 'open' ? 'status-review' : question.status === 'resolved' ? 'status-done' : ''}`}>
@@ -87,7 +87,7 @@ export function Records({ attempts, events }: Pick<WebTaskDetailResponse, 'attem
   const { t } = useI18n();
   const eventLabels: Readonly<Record<string, string>> = t.task.event;
   return <details className="detail-section fold">
-    <summary><ChevronRight size={16} />{t.task.records}</summary>
+    <summary className="pwa-press-row"><ChevronRight size={16} />{t.task.records}</summary>
     <div className="fold-body">
       {!attempts.length && !events.length && <p className="muted">{t.task.noRecords}</p>}
       {attempts.length > 0 && <>

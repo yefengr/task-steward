@@ -1,6 +1,6 @@
-import { ActionIcon, Button, Drawer, useMantineColorScheme } from '@mantine/core';
+import { ActionIcon, Button, Drawer, NativeSelect, useMantineColorScheme } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
-import { ChevronLeft, Folder, Globe, Laptop, LogOut, Menu, Plus, Sun } from 'lucide-react';
+import { ChevronLeft, Folder, Globe, Laptop, LogOut, Menu, Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { Link } from 'wouter';
@@ -8,6 +8,9 @@ import type { WebMachine, WebProject } from '@pi-steward/contract';
 import { toggleLanguage, useI18n } from '../lib/i18n';
 import { projectPath } from '../lib/paths';
 import { DESKTOP_LAYOUT_QUERY } from '../lib/ui/viewport-queries';
+import { usePwaDrawerTransition } from '@yefengr/pwa-foundation/mantine';
+import type { PwaTextSizePreference } from '@yefengr/pwa-foundation';
+import { setTextSizePreference, useTextSizePreference } from '../lib/ui/text-size';
 import { Brand, ErrorNotice } from './common';
 import { openCount } from './projects';
 
@@ -27,6 +30,7 @@ interface ShellProps {
 function Navigation({ props, close }: { props: ShellProps; close?: () => void }) {
   const { t } = useI18n();
   const { colorScheme, setColorScheme } = useMantineColorScheme();
+  const textSize = useTextSizePreference();
   const [error, setError] = useState<unknown>();
   const online = props.machines.filter((machine) => machine.online).length;
   async function logout() {
@@ -39,23 +43,29 @@ function Navigation({ props, close }: { props: ShellProps; close?: () => void })
     <Button className="sidebar-new" onClick={() => { close?.(); props.onNew(); }} disabled={!props.projects.length}
       leftSection={<Plus size={16} />}>{t.common.newTask}</Button>
     <nav className="project-nav" aria-label={t.common.projects}>
-      <Link className="nav-label" href="/" onClick={close}>{t.common.projects}</Link>
-      {props.projects.map((project) => <Link className="nav-item" key={project.id} href={projectPath(project.id)} onClick={close}
+      <Link className="nav-label pwa-press-row" href="/" onClick={close}>{t.common.projects}</Link>
+      {props.projects.map((project) => <Link className="nav-item pwa-press-row" key={project.id} href={projectPath(project.id)} onClick={close}
         aria-current={props.selectedProject === project.id ? 'page' : undefined}>
         <Folder size={20} /><span>{project.name}</span><span className="nav-count">{openCount(project)}</span>
       </Link>)}
     </nav>
     <div className="sidebar-footer">
-      <Link className="nav-item" href="/machines" onClick={close} aria-current={props.machinesPage ? 'page' : undefined}>
+      <Link className="nav-item pwa-press-row" href="/machines" onClick={close} aria-current={props.machinesPage ? 'page' : undefined}>
         <Laptop size={20} /><span>{t.common.machines}</span><span className="nav-count">{online}/{props.machines.length} {t.machine.online}</span>
       </Link>
-      <button className="nav-item" type="button" onClick={toggleLanguage} aria-label={t.common.language}>
+      <button className="nav-item pwa-press-row" type="button" onClick={toggleLanguage} aria-label={t.common.language}>
         <Globe size={20} /><span>{t.common.languageOption}</span>
       </button>
-      <button className="nav-item" type="button" onClick={() => setColorScheme(colorScheme === 'auto' ? 'light' : 'auto')}>
-        <Sun size={20} /><span>{t.common.theme}</span><span className="nav-count">{colorScheme === 'auto' ? t.common.system : t.common.light}</span>
-      </button>
-      <button className="nav-item" type="button" onClick={() => void logout()}><LogOut size={20} /><span>{t.common.logout}</span></button>
+      <div className="sidebar-preferences">
+        <NativeSelect label={t.common.theme} value={colorScheme}
+          onChange={(event) => setColorScheme(event.currentTarget.value as 'auto' | 'light' | 'dark')}
+          data={[{ value: 'auto', label: t.common.system }, { value: 'light', label: t.common.light }, { value: 'dark', label: t.common.dark }]} />
+        <NativeSelect label={t.common.textSize} value={textSize.preference}
+          onChange={(event) => setTextSizePreference(event.currentTarget.value as PwaTextSizePreference)}
+          data={[...(textSize.supportsSystem ? [{ value: 'system', label: t.common.system }] : []),
+            { value: 'standard', label: t.common.standard }, { value: 'large', label: t.common.large }, { value: 'xlarge', label: t.common.xlarge }]} />
+      </div>
+      <button className="nav-item pwa-press-row" type="button" onClick={() => void logout()}><LogOut size={20} /><span>{t.common.logout}</span></button>
       <ErrorNotice error={error} />
     </div>
   </>;
@@ -64,11 +74,12 @@ function Navigation({ props, close }: { props: ShellProps; close?: () => void })
 export function Shell(props: ShellProps) {
   const { t } = useI18n();
   const desktop = useMediaQuery(DESKTOP_LAYOUT_QUERY);
+  const drawerTransition = usePwaDrawerTransition('left');
   const [menu, setMenu] = useState(false);
   const close = () => setMenu(false);
   return <div className="app-shell">
-    <aside className="sidebar"><Navigation props={props} /></aside>
-    <Drawer opened={!desktop && menu} onClose={close} title={<Brand />} classNames={{ content: 'navigation-drawer', body: 'navigation-body' }}
+    <aside className="sidebar pwa-surface-panel"><Navigation props={props} /></aside>
+    <Drawer transitionProps={drawerTransition} opened={!desktop && menu} onClose={close} title={<Brand />} classNames={{ content: 'navigation-drawer', body: 'navigation-body' }}
       size="min(300px, 86vw)" closeButtonProps={{ 'aria-label': t.common.close }}>
       <Navigation props={props} close={close} />
     </Drawer>

@@ -54,7 +54,7 @@ export function GettingStarted({ collapsed }: { collapsed: boolean }) {
     </div>
   </>;
   if (collapsed) return <details className="onboarding fold">
-    <summary>{t.onboarding.more}</summary>
+    <summary className="pwa-press-row">{t.onboarding.more}</summary>
     <div className="fold-body onboarding-body">{body}</div>
   </details>;
   return <section className="onboarding onboarding-primary" aria-label={t.onboarding.title}>

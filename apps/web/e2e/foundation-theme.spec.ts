@@ -16,7 +16,7 @@ for (const scheme of ['light', 'dark'] as const) {
     test('真实页面消费npm主题、输入和Modal默认值，保持焦点约束和Escape关闭', async ({ page, platform }) => {
       const require = createRequire(import.meta.url);
       const resolved = require.resolve('@yefengr/pwa-foundation/mantine');
-      expect(resolved).toContain('@yefengr+pwa-foundation@0.0.3');
+      expect(resolved).toContain('@yefengr+pwa-foundation@0.0.4');
       const css = readFileSync(new URL('../src/pwa-theme.css', import.meta.url), 'utf8');
       expect(css).not.toMatch(/--pwa-(?:font-ui|text-body|radius-2xl|tonal|duration-modal-in)\s*:/);
       await login(page, platform.origin, platform.password);
@@ -44,7 +44,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await expect(cancel).toHaveAttribute('data-variant', 'default');
       await expect(cancel).toHaveCSS('background-color', scheme === 'light' ? 'rgb(235, 235, 235)' : 'rgb(64, 64, 64)');
       await expect(dialog).toHaveCSS('opacity', '1');
-      await page.screenshot({ path: artifact(`foundation-003-${scheme}-desktop.png`) });
+      await page.screenshot({ path: artifact(`foundation-004-${scheme}-desktop.png`) });
       await cancel.click();
       await expect(dialog).toHaveCount(0);
       await expect(trigger).toBeFocused();
@@ -88,7 +88,7 @@ test.describe('触控页面与确认布局', () => {
     const navigation = page.getByRole('dialog');
     await expect(navigation).toHaveCSS('border-radius', '0px');
     await expect(navigation).toHaveCSS('opacity', '1');
-    await page.screenshot({ path: artifact('foundation-003-mobile-drawer.png') });
+    await page.screenshot({ path: artifact('foundation-004-mobile-drawer.png') });
     await navigation.getByRole('button', { name: '关闭', exact: true }).click();
     await expect(navigation).toBeHidden();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

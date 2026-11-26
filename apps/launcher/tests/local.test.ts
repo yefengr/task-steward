@@ -83,7 +83,8 @@ it.skipIf(spawnSync('tmux', ['-V']).status !== 0)('独立 tmux socket 中验证�
     await expect(tmux.launchResume(target, id, { path, sessionId: randomUUID(), sessionFile: join(path, 'test.jsonl') }))
       .rejects.toMatchObject({ notStarted: true });
     await tmux.cancel(target);
-    expect(await tmux.inspect(target)).toBe('absent');
+    // 最后一个会话退出时，server/socket 关闭可能短暂返回 unavailable；必须等到明确的 absent。
+    await vi.waitFor(async () => expect(await tmux.inspect(target)).toBe('absent'), { timeout: 3_000 });
   } finally {
     if (await tmux.inspect(target) === 'present') await tmux.cancel(target);
   }

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentContextResponse, AgentControlResponse, AgentDeliveryRequest, AgentDeliveryResponse, AttemptWorkspace, Delivery } from '@pi-steward/contract';
 import { reject } from './errors.js';
+import { checkGitDelivery, confirmGitWorkspace, gitState, resolvedGitSettings } from './git-lifecycle.js';
 import type { Store } from './store.js';
 import { decisionViews, deliveryViews, questionViews, replyWait, requireTask } from './views.js';
 import type { AttemptRow } from './views.js';
@@ -14,7 +15,7 @@ type PreviousWorkspace = AgentContextResponse['workspace']['previous'];
 
 function previousWorkspace(store: Store, attempt: AttemptRow, latest: Delivery | undefined): PreviousWorkspace {
   // 只检查最新交付，不能越过它回到更早的一轮返修。
-  const previous = latest?.review === 'rework' && latest.attemptId !== attempt.id
+  const previous = latest && (latest.review === 'rework' || (attempt.kind === 'rework' && latest.review === 'accepted' && gitState(store, attempt.task_id)?.deliveryId === latest.id)) && latest.attemptId !== attempt.id
     ? store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? AND id=?', attempt.task_id, latest.attemptId)
     : undefined;
   if (!previous) return attempt.kind === 'rework' ? null : undefined;
@@ -23,7 +24,7 @@ function previousWorkspace(store: Store, attempt: AttemptRow, latest: Delivery |
   const { confirmed_workspace_path: path, confirmed_git_kind: gitKind, confirmed_git_branch: gitBranch,
     confirmed_session_id: sessionId, confirmed_session_file: sessionFile } = previous;
   const workspace = sameMachine && path !== null && gitKind !== null && sessionId !== null && sessionFile !== null
-    ? { path, gitKind, gitBranch, sessionId, sessionFile } : null;
+    ? { path, gitKind, gitBranch, sessionId, sessionFile, ...(previous.confirmed_git_root ? { gitRoot: previous.confirmed_git_root } : {}) } : null;
   return { attemptId: previous.id, machineId: previous.machine_id, sameMachine, workspace };
 }
 
@@ -35,7 +36,7 @@ export function agentContext(store: Store, attempt: AttemptRow): AgentContextRes
   const previous = task.type === 'implementation' && !resumed ? previousWorkspace(store, attempt, deliveries.at(-1)) : undefined;
   if (resumed) requirements.push(resumeWorkspaceRequirement);
   else if (task.type === 'implementation') requirements.push(implementationWorkspaceRequirement);
-  return { task: { id: task.id, projectId: task.project_id, type: task.type, title: task.title, goal: task.goal,
+  return { gitSettings: resolvedGitSettings(store, task.id), git: gitState(store, task.id), task: { id: task.id, projectId: task.project_id, type: task.type, title: task.title, goal: task.goal,
     acceptance: task.acceptance, notes: task.notes }, attempt: { id: attempt.id, kind: resumed ? 'resume' : attempt.kind },
   workspace: { path: attempt.workspace_path, requirements, ...(previous === undefined ? {} : { previous }) }, deliveries,
   decisions: decisionViews(store, task.id).filter((decision): decision is typeof decision & { confirmedByUser: true } => decision.confirmedByUser),
@@ -47,6 +48,7 @@ export function confirmWorkspace(store: Store, attempt: AttemptRow, workspace: A
   if (task.type !== 'implementation' || task.status !== 'running') {
     reject('conflict', 'Only a running implementation can confirm its workspace');
   }
+  confirmGitWorkspace(store, attempt, workspace);
   store.run(`UPDATE attempts SET confirmed_workspace_path=?, confirmed_git_kind=?, confirmed_git_branch=?,
     confirmed_session_id=?, confirmed_session_file=?, session_locator=? WHERE id=?`,
   workspace.path, workspace.gitKind, workspace.gitBranch, workspace.sessionId, workspace.sessionFile,
@@ -103,6 +105,7 @@ export function deliver(store: Store, attempt: AttemptRow, input: AgentDeliveryR
   if (task.type === 'discussion' && attempt.discussion_end_requested_at === null) {
     reject('conflict', 'Discussion must be ended before delivery');
   }
+  checkGitDelivery(store, attempt, input);
   const deliveryId = randomUUID();
   const { version } = store.get<{ version: number }>('SELECT COALESCE(MAX(version),0)+1 version FROM deliveries WHERE task_id=?', task.id)!;
   store.run(`INSERT INTO deliveries (id, task_id, attempt_id, version, summary, done, not_covered, verification, how_to,

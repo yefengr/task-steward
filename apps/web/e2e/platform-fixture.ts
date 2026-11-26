@@ -8,6 +8,7 @@ import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { expect, test as base } from '@playwright/test';
 import * as c from '@pi-steward/contract';
+import { databasePath } from '../../platform/src/config';
 
 const admin = fileURLToPath(new URL('../../platform/dist/admin.js', import.meta.url));
 const index = fileURLToPath(new URL('../../platform/dist/index.js', import.meta.url));
@@ -77,7 +78,7 @@ function platformApi(origin: string, token: string, directory: string) {
   };
 }
 
-interface Fixture { origin: string; password: string; api: ReturnType<typeof platformApi> }
+interface Fixture { origin: string; password: string; databaseFile: string; api: ReturnType<typeof platformApi> }
 export const test = base.extend<{ platform: Fixture }>({
   platform: async ({}, use) => {
     const directory = await mkdtemp(join(tmpdir(), 'steward-web-e2e-'));
@@ -98,7 +99,7 @@ export const test = base.extend<{ platform: Fixture }>({
         await waitForPlatform(origin, () => stopped);
         const api = platformApi(origin, token, directory);
         await api.register();
-        await use({ origin, password, api });
+        await use({ origin, password, databaseFile: databasePath(env), api });
       } finally {
         if (!stopped) child.kill();
         await closed;

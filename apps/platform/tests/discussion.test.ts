@@ -44,7 +44,7 @@ it('从版本 2 升级时保留旧任务与显式问题，旧问题不进入回�
     } finally { prior.connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 5 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 6 });
       expect(upgraded.get('SELECT title,status,type FROM tasks')).toEqual({ title: '原任务', status: 'running', type: 'implementation' });
       expect(upgraded.get('SELECT discussion_end_requested_at FROM attempts')).toEqual({ discussion_end_requested_at: null });
       expect(upgraded.get('SELECT text,context,status,wait_id,wait_since FROM questions')).toEqual({

@@ -96,7 +96,7 @@ function WorkspacePage({ projectId, taskId, location, logout }: {
       {machineResource.data ? <Machines machines={machines} /> : !machineResource.error && <Loading />}
     </>}
     {pairingPage && <PairComputer />}
-    {projectId && <Project id={projectId} machines={machines} />}
+    {projectId && <Project id={projectId} project={project} machines={machines} onGitSettingsChanged={projectsResource.refresh} />}
     {taskId && <>
       <ErrorNotice error={detail.error} retry={detail.refresh} />
       {!detail.data && !detail.error && <Loading />}

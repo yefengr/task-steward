@@ -16,7 +16,7 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: vi.fn(actual.homedir) };
 });
 
-const executionTools = ['steward_task', 'steward_record_workspace', 'steward_progress', 'steward_ask', 'steward_question_update',
+const executionTools = ['steward_task', 'steward_prepare_git', 'steward_record_workspace', 'steward_progress', 'steward_ask', 'steward_question_update',
   'steward_decision', 'steward_deliver', 'steward_finish'];
 const managementTools = ['steward_list_projects', 'steward_list_tasks', 'steward_get_task', 'steward_create_task', 'steward_update_task'];
 const directories: string[] = [];
@@ -127,10 +127,10 @@ it('仅任务启动会话注入执行规则，原生迁移与手动恢复保留�
   await agent.fire('session_start', { reason: 'startup' });
   const first = await guidelines(agent);
   expect(first).toMatch(/任务台后台启动.*先调用 steward_task/u);
-  expect(first).toMatch(/只读任务不创建工作树.*明确确认后才可在主分支实施/u);
+  expect(first).toMatch(/只读任务不创建工作树.*steward_prepare_git.*不能回退到主分支修改/u);
   expect(first).toContain('遵守项目已有的任务管理机制与状态来源；Steward 回报不能替代项目要求的记录更新。相关写入须符合本次授权；只读任务不擅自修改项目记录，不迁移或另建管理体系。');
   expect(first.indexOf('遵守项目已有的任务管理机制与状态来源')).toBeGreaterThan(first.indexOf('会话来源：'));
-  expect(first).not.toContain('worktree_create');
+  expect(first).toContain('worktree_create');
   expect(await guidelines(agent)).toEqual(first); // 接回仍在运行的进程，不替换任务绑定。
   await agent.fire('session_shutdown');
   const target = SessionManager.forkFrom(original.getSessionFile()!, workspace(), storage);
@@ -309,9 +309,12 @@ it('创建请求取消后使用原参数重试时复用请求 ID', async () => {
 
 it('交付未开始、失败和请求未完成时拦截 finish，确认成功后才 shutdown', async () => {
   let unblock: (response: Response) => void = () => { throw new Error('交付请求没有发出'); };
-  const fetcher = vi.fn<typeof fetch>()
-    .mockResolvedValueOnce(Response.json({ error: { code: 'internal_error', message: '不可回显的诊断内容' } }, { status: 500 }))
-    .mockImplementationOnce(() => new Promise((resolve) => { unblock = resolve; }));
+  let deliveries = 0;
+  const fetcher = vi.fn<typeof fetch>(async (url) => {
+    if (String(url).endsWith('/context')) return Response.json(taskContext('/tmp'));
+    if (++deliveries === 1) return Response.json({ error: { code: 'internal_error', message: '不可回显的诊断内容' } }, { status: 500 });
+    return new Promise((resolve) => { unblock = resolve; });
+  });
   const agent = mockTools(fetcher, { attemptId: randomUUID(), config: configFile() });
   expect((await agent.call('steward_finish')).details).toEqual({ code: 'delivery_required' });
   const failure = await agent.call('steward_deliver', delivery);
@@ -322,6 +325,7 @@ it('交付未开始、失败和请求未完成时拦截 finish，确认成功后
   expect((await agent.call('steward_finish')).details).toEqual({ code: 'delivery_required' });
   expect(agent.shutdown).not.toHaveBeenCalled();
   const saved = { deliveryId: randomUUID(), version: 1 };
+  await vi.waitFor(() => expect(deliveries).toBe(2));
   unblock(Response.json(saved));
   expect((await pending).details).toEqual(saved);
   expect((await agent.call('steward_finish')).details).toEqual({ ok: true });
@@ -329,8 +333,12 @@ it('交付未开始、失败和请求未完成时拦截 finish，确认成功后
 });
 
 it('重载扩展后交付重试保留每次尝试固定的请求 ID 和载荷', async () => {
-  const fetcher = vi.fn<typeof fetch>().mockRejectedValueOnce(new Error('网络错误详情'))
-    .mockImplementation(async () => Response.json({ deliveryId: randomUUID(), version: 1 }));
+  let deliveries = 0;
+  const fetcher = vi.fn<typeof fetch>(async (url) => {
+    if (String(url).endsWith('/context')) return Response.json(taskContext('/tmp'));
+    if (++deliveries === 1) throw new Error('网络错误详情');
+    return Response.json({ deliveryId: randomUUID(), version: 1 });
+  });
   const config = configFile();
   const attemptId = randomUUID();
   const first = await mockTools(fetcher, { attemptId, config }).call('steward_deliver', delivery);
@@ -339,7 +347,7 @@ it('重载扩展后交付重试保留每次尝试固定的请求 ID 和载荷', 
   expect(second.shutdown).not.toHaveBeenCalled();
   await second.call('steward_deliver', delivery);
   await mockTools(fetcher, { attemptId: randomUUID(), config }).call('steward_deliver', delivery);
-  const bodies = fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+  const bodies = fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init?.body)));
   expect(bodies[0]).toEqual(bodies[1]);
   expect(uuidSchema.safeParse(bodies[0].requestId).success).toBe(true);
   expect(bodies[0].requestId).not.toBe(bodies[2].requestId);

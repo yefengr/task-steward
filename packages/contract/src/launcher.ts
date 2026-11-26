@@ -2,10 +2,11 @@ import { z } from 'zod';
 import { okResponseSchema, projectIdSchema, requestIdSchema, timestampSchema, tmuxSessionSchema, uuidSchema } from './core.js';
 import { slotsSchema } from './models.js';
 import { launcherSessionDirectiveSchema, piSessionIdSchema, piSessionLocatorSchema } from './session-control.js';
+import { launcherGitOperationSchema } from './git-lifecycle.js';
 
 export const launcherHeartbeatRequestSchema = requestIdSchema.extend({
   launcherVersion: z.string().trim().min(1).max(128), slots: slotsSchema,
-  sessionControl: z.literal(true).optional(),
+  sessionControl: z.literal(true).optional(), gitLifecycle: z.literal(true).optional(),
   projects: z.array(z.strictObject({
     id: projectIdSchema, name: z.string().trim().min(1).max(500),
     path: z.string().max(4096).regex(/^\/[^\0]*$/),
@@ -18,6 +19,7 @@ export const launcherHeartbeatResponseSchema = z.strictObject({
     attemptId: uuidSchema, tmuxSession: tmuxSessionSchema, action: z.enum(['continue', 'cancel', 'unknown']),
   })),
   sessionOperations: z.array(launcherSessionDirectiveSchema).optional(),
+  gitOperations: z.array(launcherGitOperationSchema).optional(),
 });
 export const launcherClaimRequestSchema = requestIdSchema;
 export const claimedAttemptSchema = z.strictObject({

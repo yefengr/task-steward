@@ -48,6 +48,8 @@ export const api = {
   login: (password: string) => write('POST', '/auth/login', c.webLoginRequestSchema, { password }, c.webLoginResponseSchema),
   logout: () => write('POST', '/auth/logout', c.webLogoutRequestSchema, {}, c.webLogoutResponseSchema),
   projects: (signal?: AbortSignal) => request('/projects', c.webProjectsResponseSchema, { signal }),
+  updateProjectGit: (id: string, input: z.infer<typeof c.webUpdateProjectGitRequestSchema>) =>
+    write('PATCH', `/projects/${encodeURIComponent(id)}/git`, c.webUpdateProjectGitRequestSchema, input, c.webProjectGitResponseSchema),
   projectTasks: (id: string, signal?: AbortSignal) => request(`/projects/${encodeURIComponent(id)}/tasks`, c.webProjectTasksResponseSchema, { signal }),
   task: (id: string, signal?: AbortSignal) => request(taskApi(id), c.webTaskDetailResponseSchema, { signal }),
   machines: (signal?: AbortSignal) => request('/machines', c.webMachinesResponseSchema, { signal }),
@@ -61,4 +63,5 @@ export const api = {
   endDiscussion: (id: string, attemptId: string) => write('POST', `${taskApi(id)}/end-discussion`, c.webEndDiscussionRequestSchema, { attemptId }, c.webTaskMutationResponseSchema),
   sessionOperation: (id: string, input: c.WebSessionOperationRequest) => write('POST', `${taskApi(id)}/session-operation`,
     c.webSessionOperationRequestSchema, input, c.okResponseSchema),
+  retryGit: (id: string) => write('POST', `${taskApi(id)}/retry-git`, c.emptyRequestSchema, {}, c.webTaskMutationResponseSchema),
 };

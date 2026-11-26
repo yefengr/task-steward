@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { LEASE_DURATION_MS } from '@pi-steward/contract';
 import type { LauncherClaimResponse, LauncherExitedRequest, LauncherHeartbeatRequest, LauncherHeartbeatResponse, LauncherStartedRequest } from '@pi-steward/contract';
 import { reject } from './errors.js';
+import { freezeGitSettings, gitDirectives, gitState } from './git-lifecycle.js';
 import { attemptLocator, confirmedLocator, sameLocator } from './session-locator.js';
 import { checkReplacementStart, expireSessionPermissions, launchPending, replacementExited, replacementStarted, sessionDirectives } from './session-control.js';
 import type { Store } from './store.js';
@@ -31,7 +32,7 @@ export function heartbeat(store: Store, machineId: string, input: LauncherHeartb
     if (launchPending(store, attempt.id)) return [];
     return [{ attemptId: attempt.id, tmuxSession, action: attempt.cancel_requested ? 'cancel' : matched ? 'continue' : 'unknown' }];
   });
-  return { directives, ...(input.sessionControl === true ? { sessionOperations: sessionDirectives(store, machineId, now) } : {}) };
+  return { directives, ...(input.gitLifecycle === true ? { gitOperations: gitDirectives(store, machineId) } : {}), ...(input.sessionControl === true ? { sessionOperations: sessionDirectives(store, machineId, now) } : {}) };
 }
 
 export function claim(store: Store, machineId: string, now: number): LauncherClaimResponse {
@@ -47,7 +48,7 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
     if (!candidate.rework_pending) { selected = { task: candidate }; break; }
     const latestDelivery = store.get<{ attempt_id: string; review: string }>(
       'SELECT attempt_id, review FROM deliveries WHERE task_id=? ORDER BY version DESC LIMIT 1', candidate.id);
-    const previous = latestDelivery?.review === 'rework' ? store.get<AttemptRow>(
+    const previous = latestDelivery && (latestDelivery.review === 'rework' || gitState(store, candidate.id)?.phase === 'needs_rework') ? store.get<AttemptRow>(
       'SELECT * FROM attempts WHERE task_id=? AND id=? AND machine_id=?', candidate.id, latestDelivery.attempt_id, machineId) : undefined;
     const locator = previous ? attemptLocator(previous) : undefined;
     // 缺定位的返修保持停止，但不能挡住同机其它可执行任务。
@@ -58,6 +59,7 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
     return { attempt: null };
   }
   const { task, previous, locator } = selected;
+  freezeGitSettings(store, task.id);
   const id = randomUUID();
   const kind = task.rework_pending ? 'rework' : 'new';
   const sessionId = locator?.sessionId ?? tmuxTarget(id);
@@ -68,6 +70,7 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
   now, now + LEASE_DURATION_MS, locator ? JSON.stringify(locator) : null, inherit?.confirmed_workspace_path ?? null,
   inherit?.confirmed_git_kind ?? null, inherit?.confirmed_git_branch ?? null, inherit?.confirmed_session_id ?? null,
   inherit?.confirmed_session_file ?? null);
+  if (inherit?.confirmed_git_root) store.run('UPDATE attempts SET confirmed_git_root=? WHERE id=?', inherit.confirmed_git_root, id);
   store.run("UPDATE tasks SET status='running', rework_pending=0, version=version+1, updated_at=? WHERE id=?", now, task.id);
   store.run('UPDATE projects SET last_machine_id=? WHERE id=?', machineId, task.project_id);
   store.event(task.id, 'launcher', id, 'claimed', { from: 'queued', to: 'running', kind }, now);

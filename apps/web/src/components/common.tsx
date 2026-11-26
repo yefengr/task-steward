@@ -1,8 +1,9 @@
 import { Alert, Button, Loader } from '@mantine/core';
 import type { ReactNode } from 'react';
-import type { Task } from '@pi-steward/contract';
+import type { Task, TaskGit } from '@pi-steward/contract';
 import { Clock, MessageCircle, TriangleAlert } from 'lucide-react';
 import { describeError } from '../lib/api';
+import { isIntegrationPhase } from '../lib/git';
 import { useI18n } from '../lib/i18n';
 
 export function Brand() {
@@ -26,9 +27,26 @@ export function ErrorNotice({ error, retry }: { error: unknown; retry?: () => vo
   </Alert>;
 }
 
-export function StatusChip({ status }: { status: Task['status'] }) {
+const gitChipClasses = {
+  awaiting_merge: 'status-review', merge_blocked: 'status-interrupted', needs_rework: 'status-interrupted',
+  cleanup_pending: 'status-review', cleanup_blocked: 'status-interrupted', complete: 'status-done',
+} as const;
+
+// 已验收交付进入集成阶段后，用集成状态替代「待验收」，避免误导用户重复验收。
+export function StatusChip({ task }: { task: Task }) {
   const { t } = useI18n();
-  return <span className={`chip status-${status}`}>{t.statuses[status]}</span>;
+  const git = task.git;
+  if (git && isIntegrationPhase(git.phase) && Object.hasOwn(gitChipClasses, git.phase)) {
+    return <span className={`chip ${gitChipClasses[git.phase as keyof typeof gitChipClasses]}`}>{t.git.phases[git.phase]}</span>;
+  }
+  return <span className={`chip status-${task.status}`}>{t.statuses[task.status]}</span>;
+}
+
+// 执行中的 Git 状态单独展示，与核心任务状态并存。
+export function GitPhaseChip({ git }: { git: TaskGit }) {
+  const { t } = useI18n();
+  if (isIntegrationPhase(git.phase)) return null;
+  return <span className="chip">{t.git.phases[git.phase]}</span>;
 }
 
 export function TaskTypeLabel({ task }: { task: Task }) {

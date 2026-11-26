@@ -3,6 +3,7 @@ import { LEASE_DURATION_MS, piSessionLocatorSchema } from '@pi-steward/contract'
 import type { LauncherSessionDirective, LauncherSessionReport, PiSessionLocator, SessionOperationFailure,
   Task, WebSessionOperation, WebSessionOperationRequest } from '@pi-steward/contract';
 import { reject } from './errors.js';
+import { gitLocked } from './git-lifecycle.js';
 import type { Store } from './store.js';
 import { attemptLocator, confirmedLocator, sameLocator } from './session-locator.js';
 import { activeAttempt, isOnline, occupiedSlots, requireMachine, requireTask } from './views.js';
@@ -65,6 +66,7 @@ export function requestSessionOperation(store: Store, taskId: string, input: Web
     return ok;
   }
   const task = requireTask(store, taskId);
+  if (gitLocked(store, taskId)) reject('conflict', 'Accepted Git integration cannot restore or restart its workspace');
   requireNoPendingSessionOperation(store, taskId, now);
   const source = latestAttempt(store, taskId);
   if (!source || source.id !== input.attemptId || source.agent !== 'pi' || source.cancel_requested ||
@@ -141,6 +143,9 @@ function beginReplacement(store: Store, operation: OperationRow, now: number) {
   inheritWorkspace ? source.confirmed_workspace_path : null, inheritWorkspace ? source.confirmed_git_kind : null,
   inheritWorkspace ? source.confirmed_git_branch : null, inheritWorkspace ? source.confirmed_session_id : null,
   inheritWorkspace ? source.confirmed_session_file : null);
+  if (inheritWorkspace && source.confirmed_git_root) {
+    store.run('UPDATE attempts SET confirmed_git_root=? WHERE id=?', source.confirmed_git_root, replacementId);
+  }
   store.run("UPDATE tasks SET status='running', version=version+1, updated_at=? WHERE id=?", now, operation.task_id);
   store.run("UPDATE session_operations SET step='launch', replacement_id=?, deadline_at=? WHERE id=?",
     replacementId, now + LAUNCH_WINDOW_MS, operation.id);

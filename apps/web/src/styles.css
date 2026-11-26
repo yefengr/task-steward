@@ -54,6 +54,11 @@ code { font-family: var(--pwa-font-mono); overflow-wrap: anywhere; }
 .page-title { margin: 12px 0 16px; overflow-wrap: anywhere; }
 .page-title:has(+ .project-machine) { margin-bottom: 4px; }
 .project-machine { font-size: var(--pwa-text-meta); margin-bottom: 16px; overflow-wrap: anywhere; }
+.project-git-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 12px; font-size: var(--pwa-text-meta); }
+.project-git-summary button { padding-inline: 8px; }
+.project-git-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.project-git-hint p { flex: 1 1 240px; }
+.action-hint { flex-basis: 100%; }
 
 .list, .machine-list { display: grid; gap: 4px; }
 .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; min-height: 60px; padding: 12px;

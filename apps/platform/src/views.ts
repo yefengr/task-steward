@@ -1,6 +1,7 @@
 import { REPLY_REMINDER_DELAY_MS, MACHINE_ONLINE_WINDOW_MS, taskStatusSchema } from '@pi-steward/contract';
 import type { Agent, Attempt, AttemptWorkspace, Delivery, Task, TaskStatus, TaskType, WaitingReason, WebMachine, WebProject, WebTaskDetailResponse } from '@pi-steward/contract';
 import { reject } from './errors.js';
+import { gitState, projectGitSettings } from './git-lifecycle.js';
 import { sessionOperationView } from './session-control.js';
 import type { Store } from './store.js';
 
@@ -8,6 +9,7 @@ export interface TaskRow {
   id: string; project_id: string; title: string; goal: string; acceptance: string; notes: string; agent: Agent;
   machine_id: string | null; type: TaskType; status: TaskStatus; rework_pending: number; position: number;
   created_by: 'user' | 'agent'; version: number; created_at: number; updated_at: number;
+  base_branch: string | null; git_sync_before_start: number | null;
 }
 export interface AttemptRow {
   id: string; task_id: string; machine_id: string; agent: Agent; kind: Exclude<Attempt['kind'], 'resume'>; session_id: string;
@@ -15,6 +17,7 @@ export interface AttemptRow {
   tmux_session: string | null; claimed_at: number; started_at: number | null; lease_expires_at: number;
   cancel_requested: number; discussion_end_requested_at: number | null; ended_at: number | null;
   exit_code: number | null; result: Attempt['result']; workspace_path: string;
+  confirmed_git_root: string | null;
   confirmed_workspace_path: string | null; confirmed_git_kind: AttemptWorkspace['gitKind'] | null;
   confirmed_git_branch: string | null; confirmed_session_id: string | null; confirmed_session_file: string | null;
 }
@@ -94,6 +97,7 @@ export function taskView(store: Store, task: TaskRow, now: number): Task {
   const wait = running && !discussionEndRequested ? replyWait(store, running) : undefined;
   return {
     id: task.id, projectId: task.project_id, title: task.title, goal: task.goal, acceptance: task.acceptance,
+    baseBranch: task.base_branch, git: gitState(store, task.id),
     notes: task.notes, agent: task.agent, machineId: task.machine_id, type: task.type, status: task.status,
     reworkPending: Boolean(task.rework_pending), position: task.position, createdBy: task.created_by,
     version: task.version, createdAt: task.created_at, updatedAt: task.updated_at,
@@ -150,6 +154,7 @@ export function projectViews(store: Store): WebProject[] {
   const totals = store.all<{ project_id: string; status: TaskStatus; count: number }>(
     'SELECT project_id, status, COUNT(*) count FROM tasks GROUP BY project_id, status');
   return projects.map((p) => ({ id: p.id, name: p.name, lastMachineId: p.last_machine_id, createdAt: p.created_at,
+    gitSettings: projectGitSettings(store, p.id),
     counts: Object.fromEntries(taskStatusSchema.options.map((s) => [s, 0]).concat(
       totals.filter((row) => row.project_id === p.id).map((row) => [row.status, row.count]))) as WebProject['counts'],
   }));

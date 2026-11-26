@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { emptyRequestSchema, nonEmptyTextSchema, okResponseSchema, projectIdSchema, taskStatusSchema, timestampSchema, uuidSchema } from './core.js';
 import { attemptSchema, decisionSchema, deliverySchema, progressSchema, questionSchema, slotsSchema, taskContentSchema, taskEventSchema, taskSchema } from './models.js';
 import { webSessionOperationSchema } from './session-control.js';
+import { projectGitSettingsSchema } from './git-lifecycle.js';
 
 export const webLoginRequestSchema = z.strictObject({ password: z.string().min(1).max(1024) });
 export const webLoginResponseSchema = okResponseSchema;
@@ -10,7 +11,7 @@ export const webLogoutResponseSchema = okResponseSchema;
 export const webMeResponseSchema = z.strictObject({ authenticated: z.boolean() });
 export const webProjectSchema = z.strictObject({
   id: projectIdSchema, name: z.string(), lastMachineId: uuidSchema.nullable(), createdAt: timestampSchema,
-  counts: z.record(taskStatusSchema, z.int().nonnegative()),
+  counts: z.record(taskStatusSchema, z.int().nonnegative()), gitSettings: projectGitSettingsSchema.optional(),
 });
 export const webProjectsResponseSchema = z.strictObject({ projects: z.array(webProjectSchema) });
 export const webProjectTasksResponseSchema = z.strictObject({ tasks: z.array(taskSchema) });

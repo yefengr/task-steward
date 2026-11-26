@@ -8,7 +8,8 @@ import type { ClientOptions } from './client.js';
 import { retryableWrites } from './retry-writes.js';
 import { registerSessionReport } from './session-report.js';
 import { registerTaskSession } from './task-session.js';
-import { checkReworkWorkspace, currentWorkspace } from './workspace.js';
+import { checkReworkWorkspace } from './workspace.js';
+import { prepareGit, proveWorkspace } from './git-lifecycle.js';
 
 const text = () => Type.String({ maxLength: 100_000 });
 const lines = () => Type.Array(text());
@@ -31,6 +32,18 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
       code === 'helper_unavailable' ? '请重新安装 Steward。' :
       code === 'proxy_unsupported' ? '显式代理需要使用 Node 24.20.0 或更高版本运行 Pi。' :
       code === 'invalid_request' ? '请检查工具参数后重试。' :
+      code === 'git_commit_required' ? '已准备的代码任务必须提供完整 HEAD SHA；运行 git rev-parse HEAD，将完整输出作为 commit 后交付。' :
+      code === 'git_base_commit_invalid' ? '显式 baseCommit 必须是快照中的完整基线 SHA；读取 steward_task 核对，或省略以使用快照。' :
+      code === 'git_configuration_required' ? '请用户先在项目 Git 设置中配置基准分支，再调用 steward_prepare_git。' :
+      code === 'git_worktree_capability_required' ? '当前 Pi 缺少 worktree_create 能力；请恢复已有 Pi 工作树能力，不得在主目录写代码。' :
+      code === 'git_repository_busy' ? '仓库正在执行其他 Git 操作；待其完成后重试，不要删除锁文件。' :
+      code === 'git_upstream_diverged' ? '基准分支与上游分叉；请用户协调基准分支，不要 reset 或强制同步。' :
+      code === 'git_dirty' ? '基准工作树有未提交修改；请保留并由其所有者处理后再准备。' :
+      code === 'git_fetch_failed' ? '上游获取失败；检查远端配置、网络和权限后再准备。' :
+      code === 'git_invalid_branch' || code === 'git_upstream_invalid' || code === 'git_invalid_ref' ? '分支或上游引用无效；核对 Git 配置和原生分支名称后再准备。' :
+      code === 'git_worktree_locked' ? '工作树已锁定；请其所有者确认用途，不要强制解锁或删除。' :
+      code === 'git_workspace_unverified' || code === 'git_snapshot_conflict' || code === 'git_dedicated_branch_required' ? '当前分支、HEAD 或现场与冻结快照不符；重新读取 steward_task 并切回原任务工作树与会话，不创建替代现场。' :
+      code === 'git_implementation_required' ? '只为实现任务准备 Git；只读或讨论任务不要创建工作树。' :
       code === 'task_context_required' ? '请先调用 steward_task 确认任务类型；只为实现任务记录工作现场。' :
       code === 'workspace_unavailable' ? '无法核对当前目录、Git 或持久化 Pi 会话；请核对本机现场，必要时向用户确认。' :
       code === 'attempt_ended' ? '本次尝试已结束，请检查平台状态。' :
@@ -44,6 +57,7 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
 const editableTask = {
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
   goal: Type.Optional(text()), acceptance: Type.Optional(text()), notes: Type.Optional(text()),
+  baseBranch: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 };
 
 function registerTaskManagement(pi: ExtensionAPI, options: ClientOptions) {
@@ -121,14 +135,34 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
     }),
   });
   pi.registerTool({
+    name: 'steward_prepare_git', label: '准备任务 Git 基线',
+    description: '代码写入前显式同步并固定基线。返回 baseRef 后交给现有 Pi worktree_create；不自行创建或迁移会话。',
+    parameters: Type.Object({ taskBranch: Type.String() }),
+    execute: (_id, { taskBranch }, signal) => report(async () => {
+      const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
+      if (!data.git && !pi.getAllTools().some((tool) => tool.name === 'worktree_create')) throw new AgentError('git_worktree_capability_required');
+      const prepared = await prepareGit(data, taskBranch);
+      let snapshot: c.TaskGit;
+      if ('phase' in prepared) snapshot = prepared;
+      else {
+        const saved = await write('POST', 'git/prepare', prepared, (id) => request('POST', 'git/prepare', c.agentPrepareGitResponseSchema,
+          validatedBody(c.agentPrepareGitRequestSchema, { ...prepared, requestId: id }), signal));
+        snapshot = saved.git;
+      }
+      taskContext = { ...data, git: snapshot };
+      return { git: snapshot, baseRef: snapshot.baseCommit, taskBranch: snapshot.taskBranch };
+    }),
+  });
+  pi.registerTool({
     name: 'steward_record_workspace', label: '记录 Steward 工作现场',
     description: '实现任务确认工作空间后，保存当前 Pi 会话的实际工作目录、Git 分支和会话定位。迁移或切换后在目标会话调用。',
     parameters: Type.Object({}),
     execute: (_id, _args, signal, _update, ctx) => report(async () => {
       if (taskContext?.task.type !== 'implementation') throw new AgentError('task_context_required');
-      const registeredPath = taskContext.workspace.path;
+      const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
+      taskContext = data;
       return sessionReport.workspace(async () => {
-        const workspace = await currentWorkspace(ctx, registeredPath);
+        const workspace = await proveWorkspace(ctx, data);
         await write('POST', 'workspace', workspace, (requestId) => request('POST', 'workspace', c.okResponseSchema,
           validatedBody(c.agentWorkspaceRequestSchema, { workspace, requestId }), signal));
         return { ok: true, workspace };
@@ -163,11 +197,13 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
       validatedBody(c.agentDecisionRequestSchema, { ...args, requestId: id }), signal))),
   });
   pi.registerTool({
-    name: 'steward_deliver', label: '保存 Steward 交付', description: '保存本次交付。网络失败时使用完全相同的参数重试。',
+    name: 'steward_deliver', label: '保存 Steward 交付', description: '保存本次交付。已准备 Git 的代码任务必须传完整 HEAD SHA 作为 commit；baseCommit 可省略并使用冻结快照，显式传入必须完全一致。只读任务不要求提交。仅网络结果未知时使用完全相同的参数重试。',
     parameters: deliveryParameters,
-    execute: (_id, args, signal) => report(async () => {
+    execute: (_id, args, signal, _update, ctx) => report(async () => {
+      const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
+      if (data.git) await proveWorkspace(ctx, data, args);
       const saved = await request('POST', 'deliveries', c.agentDeliveryResponseSchema,
-        validatedBody(c.agentDeliveryRequestSchema, { ...args, requestId }), signal);
+        validatedBody(c.agentDeliveryRequestSchema, { ...args, ...(data.git ? { baseCommit: args.baseCommit ?? data.git.baseCommit } : {}), requestId }), signal);
       delivered = true;
       return saved;
     }),

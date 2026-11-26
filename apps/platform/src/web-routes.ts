@@ -6,6 +6,7 @@ import { jsonInput, routeParam } from './app.js';
 import type { AppOptions } from './app.js';
 import { createWebSession, deleteWebSession, LoginLimiter, loginSource, originConfig, passwordVerifier, SESSION_COOKIE, webSessionValid } from './auth.js';
 import { reject } from './errors.js';
+import { retryGit, updateProjectGit } from './git-lifecycle.js';
 import { mountWebPairing } from './pairing-routes.js';
 import { requestSessionOperation } from './session-control.js';
 import { createTask, requestDiscussionEnd, taskAction, updateTask } from './tasks.js';
@@ -54,6 +55,16 @@ export function mountWeb(options: AppOptions, now: () => number) {
     return context.json(c.webLogoutResponseSchema.parse({ ok: true }));
   });
   web.get('/projects', (context) => context.json(c.webProjectsResponseSchema.parse({ projects: projectViews(store) })));
+  web.patch('/projects/:id/git', async (context) => {
+    const id = routeParam(context.req.param('id'), c.projectIdSchema);
+    const input = await jsonInput(context, c.webUpdateProjectGitRequestSchema);
+    return context.json(store.immediate(() => c.webProjectGitResponseSchema.parse(updateProjectGit(store, id, input))));
+  });
+  web.post('/tasks/:id/retry-git', async (context) => {
+    const id = routeParam(context.req.param('id'), c.uuidSchema);
+    await jsonInput(context, c.webTaskActionRequestSchema);
+    return context.json(store.immediate(() => c.webTaskMutationResponseSchema.parse(retryGit(store, id, now()))));
+  });
   web.get('/projects/:id/tasks', (context) => {
     const id = routeParam(context.req.param('id'), c.projectIdSchema);
     requireProject(store, id);

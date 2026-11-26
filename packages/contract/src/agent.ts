@@ -3,11 +3,12 @@ import { nonEmptyTextSchema, okResponseSchema, projectIdSchema, requestIdSchema,
 import { attemptKindSchema, decisionSchema, deliveryContentSchema, deliverySchema, questionSchema, taskContentSchema, taskTypeSchema } from './models.js';
 
 import { piSessionLocatorSchema } from './session-control.js';
+import { gitPathSchema, resolvedGitSettingsSchema, taskGitSchema } from './git-lifecycle.js';
 
 const gitBranch = z.string().min(1).max(1024).regex(/^[^\0\r\n]+$/u);
 export const attemptWorkspaceSchema = piSessionLocatorSchema.extend({
   gitKind: z.enum(['non_git', 'primary', 'linked']),
-  gitBranch: gitBranch.nullable(),
+  gitBranch: gitBranch.nullable(), gitRoot: gitPathSchema.optional(),
 }).refine(({ gitKind, gitBranch }) => gitKind !== 'non_git' || gitBranch === null);
 export type AttemptWorkspace = z.infer<typeof attemptWorkspaceSchema>;
 export const agentWorkspaceRequestSchema = requestIdSchema.extend({ workspace: attemptWorkspaceSchema });
@@ -18,6 +19,7 @@ export const agentContextResponseSchema = z.strictObject({
     id: uuidSchema, projectId: projectIdSchema, type: taskTypeSchema.default('implementation'),
   }),
   attempt: z.strictObject({ id: uuidSchema, kind: attemptKindSchema }),
+  gitSettings: resolvedGitSettingsSchema.optional(), git: taskGitSchema.nullable().optional(),
   workspace: z.strictObject({
     path: z.string(), requirements: z.array(nonEmptyTextSchema),
     previous: z.strictObject({

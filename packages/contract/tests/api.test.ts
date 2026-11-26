@@ -41,6 +41,17 @@ it('返修领取携带实际 Pi ID 与精确 locator，仍兼容首次领取', (
   expect(c.claimedAttemptSchema.safeParse({ ...rework, sessionLocator: { ...locator, path: 'relative' } }).success).toBe(false);
 });
 
+const gitSettings = { baseBranch: 'main', syncBeforeStart: true, version: 1 };
+const gitState = { baseBranch: 'main', baseCommit: 'a'.repeat(40), taskBranch: 'feature/task',
+  repositoryPath: '/work/repo', worktreePath: '/work/linked', machineId: id,
+  syncBeforeStart: true, syncResult: 'no_upstream', phase: 'ready', operationId: null, deliveryId: null,
+  approvedCommit: null, mergedCommit: null, message: null };
+const gitPrepare = { ...request, baseBranch: gitState.baseBranch, baseCommit: gitState.baseCommit,
+  taskBranch: gitState.taskBranch, repositoryPath: gitState.repositoryPath, syncBeforeStart: true, syncResult: 'no_upstream' };
+const gitOperation = { id, taskId: id, projectId, deliveryId: id, baseBranch: gitState.baseBranch,
+  baseCommit: gitState.baseCommit, taskBranch: gitState.taskBranch, repositoryPath: gitState.repositoryPath,
+  worktreePath: gitState.worktreePath, approvedCommit: 'b'.repeat(40), mergedCommit: null, phase: 'merge' };
+
 type SchemaName = Extract<keyof typeof c, `${string}Schema`>;
 const samples = {
   agentSchema: ['pi', 'other'], taskStatusSchema: ['review', 'needs_verification'], errorCodeSchema: ['conflict', 'unknown'],
@@ -56,6 +67,17 @@ const samples = {
   deliverySchema: [delivery, { ...delivery, version: 0 }], decisionSchema: [decision, { ...decision, confirmedByUser: 1 }],
   progressSchema: [progress, { ...progress, text: '' }], questionSchema: [question, { ...question, status: 'cancelled' }],
   taskEventSchema: [event, { ...event, actor: 'machine' }],
+  gitBranchSchema: ['release/2.0', '--all'], gitCommitSchema: ['a'.repeat(40), 'shortsha'],
+  gitPathSchema: ['/work/linked', '../linked'], gitSyncResultSchema: ['no_upstream', 'failed_but_skipped'],
+  projectGitSettingsSchema: [gitSettings, { ...gitSettings, version: 0 }],
+  webUpdateProjectGitRequestSchema: [gitSettings, { ...gitSettings, baseBranch: '-main' }],
+  webProjectGitResponseSchema: [{ settings: gitSettings }, gitSettings],
+  resolvedGitSettingsSchema: [{ baseBranch: null, syncBeforeStart: true }, { baseBranch: 'main' }],
+  taskGitPhaseSchema: ['cleanup_blocked', 'done'], taskGitSchema: [gitState, { ...gitState, approvedCommit: 'result' }],
+  agentPrepareGitRequestSchema: [gitPrepare, { ...gitPrepare, baseCommit: 'base' }],
+  agentPrepareGitResponseSchema: [{ git: gitState }, { git: { ...gitState, phase: 'done' } }],
+  launcherGitOperationSchema: [gitOperation, { ...gitOperation, approvedCommit: 'HEAD' }],
+  launcherGitReportSchema: [{ ...request, outcome: 'merged', mergedCommit: 'b'.repeat(40) }, { ...request, outcome: 'forced' }],
   webLoginRequestSchema: [{ password: 'schema-only' }, { password: '' }], webLoginResponseSchema: [ok, {}],
   webLogoutRequestSchema: [{}, { extra: true }], webLogoutResponseSchema: [ok, {}],
   webMeResponseSchema: [{ authenticated: false }, { authenticated: 0 }], webProjectSchema: [project, { ...project, counts: {} }],

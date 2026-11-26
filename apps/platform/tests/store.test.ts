@@ -14,10 +14,10 @@ import { openStore, sha256, Store } from '../src/store.js';
 it('迁移空库并开启外键，重复打开保留版本和数据', () => {
   const store = openStore(':memory:');
   try {
-    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 5 });
+    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 6 });
     expect(store.get('PRAGMA foreign_keys')).toMatchObject({ foreign_keys: 1 });
     expect(store.get('PRAGMA busy_timeout')).toMatchObject({ timeout: 5000 });
-    expect(() => store.run('INSERT INTO projects VALUES (?,?,?,?)', 'project', 'Project', 'missing', 100)).toThrow(/FOREIGN KEY/);
+    expect(() => store.run('INSERT INTO projects (id,name,last_machine_id,created_at) VALUES (?,?,?,?)', 'project', 'Project', 'missing', 100)).toThrow(/FOREIGN KEY/);
     expect(store.all<{ name: string }>("SELECT name FROM sqlite_schema WHERE type='index' AND name='one_active_attempt'")).toHaveLength(1);
   } finally { store.connection.close(); }
 });
@@ -35,7 +35,7 @@ it('升级原有数据库时建立配对表并保留已有机器及凭据', asyn
     } finally { connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 5 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 6 });
       expect(upgraded.all('SELECT * FROM machine_pairings')).toEqual([]);
       expect(upgraded.get('SELECT name, token_hash FROM machines')).toEqual({ name: 'Existing Mac', token_hash: sha256(token) });
     } finally { upgraded.connection.close(); }
@@ -61,7 +61,12 @@ it('升级三版数据库保留领取目录和会话，旧尝试的实际现场�
     } finally { prior.connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 5 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 6 });
+      expect(upgraded.get('SELECT git_base_branch,git_sync_before_start,git_version FROM projects')).toEqual({
+        git_base_branch: null, git_sync_before_start: 1, git_version: 1,
+      });
+      expect(upgraded.get('SELECT base_branch FROM tasks')).toEqual({ base_branch: null });
+      expect(upgraded.all('SELECT * FROM task_git')).toEqual([]);
       expect(upgraded.get('SELECT * FROM attempts WHERE id=?', 'attempt')).toMatchObject({
         workspace_path: '/work/registered', session_id: 'launcher-session', confirmed_workspace_path: null,
         confirmed_git_kind: null, confirmed_git_branch: null, confirmed_session_id: null, confirmed_session_file: null,

@@ -6,7 +6,8 @@ import { useTaskViewState } from '../lib/task-view-state';
 import { isValidDialogFocus } from '../lib/dialog-focus';
 import { useI18n } from '../lib/i18n';
 import { projectPath } from '../lib/paths';
-import { StatusChip, TaskFlags, TaskTypeLabel, WaitReason } from './common';
+import { GitPhaseChip, StatusChip, TaskFlags, TaskTypeLabel, WaitReason } from './common';
+import { GitSection } from './git-section';
 import { TaskControls } from './task-controls';
 import { TaskForm } from './task-form';
 import { DateTime, Deliveries, DiscussionHistory, Records } from './task-records';
@@ -100,7 +101,7 @@ export default function TaskDetail({ detail, project, machines, onChanged }: {
     <header className="detail-head">
       <h1 className="user-text">{task.title}</h1>
       <div className="meta-line">
-        <StatusChip status={task.status} /><TaskFlags task={task} /><TaskTypeLabel task={task} />
+        <StatusChip task={task} />{task.git && <GitPhaseChip git={task.git} />}<TaskFlags task={task} /><TaskTypeLabel task={task} />
         <span>{t.form.agent} · {task.agent === 'pi' ? 'Pi' : t.form.claude}</span>
         <span>{t.form.machine} · {machineName}</span>
         {task.createdBy === 'agent' && <span>{t.task.createdByAgent}</span>}
@@ -109,6 +110,7 @@ export default function TaskDetail({ detail, project, machines, onChanged }: {
         {task.reworkPending && <span className="chip">{t.task.reworkPending}</span>}</div>}
     </header>
     <Attention detail={detail} />
+    <GitSection task={task} />
     <div className="current-work">{order.map((section) => sections[section])}</div>
     <ContextSections detail={detail} />
     <DiscussionHistory questions={detail.questions.filter((question) => question.status !== 'open')} />

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMediaQuery } from '@mantine/hooks';
 import { isValidDialogFocus, restoreDialogFocus } from '../lib/dialog-focus';
 import type { FormEvent } from 'react';
-import { titleSchema, textSchema, webCreateTaskRequestSchema, webUpdateTaskRequestSchema } from '@pi-steward/contract';
+import { gitBranchSchema, titleSchema, textSchema, webCreateTaskRequestSchema, webUpdateTaskRequestSchema } from '@pi-steward/contract';
 import type { Task, WebMachine, WebProject } from '@pi-steward/contract';
 import type { z } from 'zod';
 import type { taskContentSchema } from '@pi-steward/contract';
@@ -14,12 +14,14 @@ import { useFloatingSafeMiddlewares } from '@yefengr/pwa-foundation';
 import { ErrorNotice } from './common';
 
 type Draft = z.infer<typeof taskContentSchema>;
-const emptyDraft: Draft = { title: '', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null, type: 'implementation' };
+const emptyDraft: Draft = { title: '', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null, type: 'implementation', baseBranch: null };
 const textFields = ['goal', 'acceptance', 'notes'] as const;
 const editableFields = ['title', ...textFields, 'agent', 'machineId'] as const;
+type EditableField = (typeof editableFields)[number] | 'baseBranch';
 
 function draftFrom(task: Task): Draft {
-  return { title: task.title, goal: task.goal, acceptance: task.acceptance, notes: task.notes, agent: task.agent, machineId: task.machineId, type: task.type };
+  return { title: task.title, goal: task.goal, acceptance: task.acceptance, notes: task.notes, agent: task.agent,
+    machineId: task.machineId, type: task.type, baseBranch: task.baseBranch ?? null };
 }
 
 interface FormProps {
@@ -83,7 +85,19 @@ export function TaskForm(props: FormProps) {
   const conflict = Boolean(baseTask && props.currentTask && baseTask.version !== props.currentTask.version)
     || (error instanceof WebError && error.code === 'conflict');
   const currentClosed = props.currentTask?.status === 'done' || props.currentTask?.status === 'cancelled';
-  const fields = baseTask ? editableFields.filter((field) => draft[field] !== baseTask[field]) : editableFields;
+  const selectedProject = props.projects.find((project) => project.id === projectId);
+  const defaultBranch = selectedProject?.gitSettings?.baseBranch ?? null;
+  const showBaseBranch = (baseTask?.type ?? draft.type) === 'implementation';
+  // 已开始或已冻结快照的任务不能改基准分支；服务端仍做最终校验。
+  const baseBranchLocked = Boolean(props.currentTask) && (Boolean(props.currentTask!.git)
+    || (props.currentTask!.status !== 'unscheduled' && props.currentTask!.status !== 'queued'));
+  const baseBranchEditable = showBaseBranch && !baseBranchLocked;
+  const baseBranchDirty = (draft.baseBranch?.trim() || null) !== (baseTask?.baseBranch ?? null);
+  const fields: EditableField[] = baseTask
+    ? [...editableFields.filter((field) => draft[field] !== baseTask[field]),
+      ...(baseBranchEditable && baseBranchDirty ? ['baseBranch' as const] : [])]
+    : [...editableFields, ...(showBaseBranch ? ['baseBranch' as const] : [])];
+  const branchInvalid = validate && Boolean(draft.baseBranch?.trim()) && !gitBranchSchema.safeParse(draft.baseBranch!.trim()).success;
   const titleError = validate && !titleSchema.safeParse(draft.title).success
     ? draft.title.trim() ? t.form.invalid : t.form.required : undefined;
   const machineOptions = props.machines.filter((machine) => machine.revokedAt === null || machine.id === draft.machineId);
@@ -101,14 +115,18 @@ export function TaskForm(props: FormProps) {
     if (busyRef.current || closing.current || conflict || currentClosed || fields.length === 0) return;
     setValidate(true);
     if (!titleSchema.safeParse(draft.title).success || textFields.some((field) => !textSchema.safeParse(draft[field]).success)) return;
+    if (showBaseBranch && baseBranchEditable && Boolean(draft.baseBranch?.trim())
+      && !gitBranchSchema.safeParse(draft.baseBranch!.trim()).success) return;
     busyRef.current = true;
     setBusy(true);
     setError(undefined);
     try {
+      const changes = Object.fromEntries(fields.map((field) => [field,
+        field === 'baseBranch' ? draft.baseBranch?.trim() || null : draft[field]]));
       const result = baseTask
-        ? await api.edit(baseTask.id, webUpdateTaskRequestSchema.parse({ version: baseTask.version,
-          ...Object.fromEntries(fields.map((field) => [field, draft[field]])) }))
-        : await api.create(webCreateTaskRequestSchema.parse({ ...draft, projectId }));
+        ? await api.edit(baseTask.id, webUpdateTaskRequestSchema.parse({ version: baseTask.version, ...changes }))
+        : await api.create(webCreateTaskRequestSchema.parse({ ...draft,
+          ...(showBaseBranch ? { baseBranch: draft.baseBranch?.trim() || null } : {}), projectId }));
       saved.current = result.task;
       // 导航卸载后仍清原目标，但不调用旧页面的保存/导航回调。
       if (!mounted.current) { reset(); props.onClose(); return; }
@@ -144,6 +162,13 @@ export function TaskForm(props: FormProps) {
           const type = event.currentTarget.value as Draft['type'];
           setDraft((value) => ({ ...value, type }));
         }} data={[{ value: 'implementation', label: t.taskTypes.implementation }, { value: 'discussion', label: t.taskTypes.discussion }]} />}
+        {showBaseBranch && (baseBranchEditable
+          ? <TextInput label={t.git.taskBaseBranch} value={draft.baseBranch ?? ''}
+            placeholder={defaultBranch ? t.git.inheritDefault.replace('{branch}', defaultBranch) : t.git.noDefault}
+            description={t.git.taskBaseBranchHelp} error={branchInvalid ? t.git.invalidBranch : undefined}
+            onChange={(event) => { const baseBranch = event.currentTarget.value; setDraft((value) => ({ ...value, baseBranch })); }} />
+          : <TextInput label={t.git.taskBaseBranch} disabled description={t.git.branchLocked}
+            value={props.currentTask?.git?.baseBranch ?? draft.baseBranch ?? defaultBranch ?? ''} />)}
         {textFields.map((field) => <Textarea key={field} label={t.form[field]} value={draft[field]}
           error={validate && !textSchema.safeParse(draft[field]).success ? t.form.invalid : undefined}
           onChange={(event) => { const text = event.currentTarget.value; setDraft((value) => ({ ...value, [field]: text })); }} />)}

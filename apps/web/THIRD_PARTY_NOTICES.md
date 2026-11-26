@@ -1,6 +1,6 @@
 # 第三方许可
 
-视觉与语言基础来自 Pi Reach 提交 `0230224`，按 Pi Steward 的界面范围删减适配。
+最初的视觉与语言基础来自 Pi Reach 提交 `0230224`，按任务控制台的界面范围删减适配。以下是历史复制来源清单，不表示所有目标文件仍保留；部分主题与工具后续已由公开基础包替代，来源归属和许可继续保留。
 
 - `pwa/src/app/pwa-theme.css` → `src/pwa-theme.css`（保留任务控制台 token；安全区变量与 44px 触控目标改由下方 npm 包提供）
 - `pwa/src/lib/ui/pi-reach-theme.ts` → `src/lib/ui/steward-theme.ts`
@@ -8,7 +8,7 @@
 - `pwa/src/lib/ui/viewport-queries.ts` → `src/lib/ui/viewport-queries.ts`
 - `pwa/src/lib/i18n/{index.ts,locale.ts,messages/zh.ts,messages/en.ts}` → `src/lib/i18n/`（保留组织方式，界面文案重新编写）
 
-安全区与浮动组件定位能力来自 npm 公开包 `@yefengr/pwa-foundation@0.0.1`（MIT），安装后使用其 `foundation.css` 与 `useFloatingSafeMiddlewares`。
+当前安全区、浮动组件定位、主题、控件、表面与交互辅助消费 npm 公开包 `@yefengr/pwa-foundation`（MIT），精确版本以本目录 `package.json` 与根锁文件为准。最初接入版本为 `0.0.1`，后续升级不取消历史复制代码的版权归属。下方保留原始 MIT 许可全文。
 
 ```text
 MIT License

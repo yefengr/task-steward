@@ -1,5 +1,7 @@
 # 工作树迁移后的会话恢复回归
 
+> 已归档的事故与修复回归记录，对应 `05d1215`（启动器 0.3.1）的交付范围。修复已合入本地 main；下文测试结果是该次隔离回归的历史证据，不代表本次整理重新运行，也不证明正式平台和 Mac 已配套升级。当前规则见 [ARCHITECTURE](../../ARCHITECTURE.md)，操作见 [DEPLOYMENT](../../DEPLOYMENT.md)，状态只看 [ROADMAP](../../ROADMAP.md)。
+
 ## 事故与人工恢复参照
 
 2026-11-24，任务 `8bdfe4b3` 的首次实现尝试 `13611550` 已迁到工作树 `~/.pi/worktrees/reach-pwa-foundation`，分支为 `feature/261125-pwa-foundation`，实际 Pi 会话为 `01a20be1-8d87-701e-ae59-1bd6fa966d23`。登记目录 `/Users/yefeng/Code/pi-reach` 中仍保留最初的 `steward-13611550…` 会话。

@@ -128,6 +128,8 @@ it('仅任务启动会话注入执行规则，原生迁移与手动恢复保留�
   const first = await guidelines(agent);
   expect(first).toMatch(/任务台后台启动.*先调用 steward_task/u);
   expect(first).toMatch(/只读任务不创建工作树.*明确确认后才可在主分支实施/u);
+  expect(first).toContain('遵守项目已有的任务管理机制与状态来源；Steward 回报不能替代项目要求的记录更新。相关写入须符合本次授权；只读任务不擅自修改项目记录，不迁移或另建管理体系。');
+  expect(first.indexOf('遵守项目已有的任务管理机制与状态来源')).toBeGreaterThan(first.indexOf('会话来源：'));
   expect(first).not.toContain('worktree_create');
   expect(await guidelines(agent)).toEqual(first); // 接回仍在运行的进程，不替换任务绑定。
   await agent.fire('session_shutdown');
@@ -140,6 +142,7 @@ it('仅任务启动会话注入执行规则，原生迁移与手动恢复保留�
   const historical = await guidelines(manual);
   expect(historical).toContain('会话历史来源');
   expect(historical).not.toContain('先调用 steward_task');
+  expect(historical).not.toContain('回报不能替代项目要求的记录更新');
   expect(manual.registerTool.mock.calls.map(([tool]) => tool.name)).toEqual(managementTools);
 });
 

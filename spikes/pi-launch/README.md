@@ -1,6 +1,6 @@
 # Pi 启动方式真机验证（V1、V3、V4）
 
-本目录记录 Pi 启动方式的真机验证步骤，用命令模拟启动器在后台 tmux 会话中以交互模式启动 Pi。启动方式见[首版技术方案第 5.4 节](../../docs/plans/active/20261112-initial-design.md#54-启动方式tmux-交互模式)，验证结果见第 9.2 节。
+本目录保留早期 Pi 启动预研（V1、V3、V4），不是当前启动器安装或验收入口。历史启动方式见[首版技术方案第 5.4 节](../../docs/plans/completed/20261112-initial-design.md#54-启动方式tmux-交互模式)，结果见该方案第 9.2 节；当前操作使用[部署与 Mac 接入](../../docs/DEPLOYMENT.md)。下面保留旧版探针参数，重跑前须核对当前 Pi 帮助，不为补记录重跑已完成验收。
 
 | 文件 | 用途 |
 | --- | --- |
@@ -18,13 +18,13 @@ pi --version
 pi --help | grep -E -- '--session-id|--append-system-prompt|--approve|--extension|--name'
 ```
 
-设置本次验证用的变量。验证全程使用独立的 tmux server（`-L steward`），与你自己的 tmux 隔离，不会继承你平时 tmux 会话里的环境变量，正式启动器也将这样做：
+设置本次验证用的变量。V1、V3、V4 的启动、查询与清理全程使用测试专用 server `steward-test`（`-L "$SOCK"`），与正式启动器的 `steward` 及默认 tmux 隔离。开始前确认测试 server 中没有其他正在使用的会话；不要把 `$SOCK` 改为正式 server 名称。独立 server 不继承平时 tmux 会话里的环境变量。
 
 ```bash
 export PROBE_EXT="$PWD/spikes/pi-launch/probe-extension.ts"
 export PROJ=/tmp/steward-probe-project
 export LOG=/tmp/steward-probe.log
-export SOCK=steward
+export SOCK=steward-test
 ```
 
 创建一次性测试项目。`AGENTS.md` 里放一条可观察的规则，用来判断项目配置是否加载：
@@ -128,11 +128,11 @@ cat "$PROJ/hello.txt"
 | 4-2 保留原上下文 | Pi 不需要再问是哪个文件，`hello.txt` 内容变为 `hello again` |
 | 4-3 Pi Reach 可继续 | Pi Reach 中该会话能看到之前的历史并继续对话 |
 
-完成后让 Pi 调用 `steward_probe_finish` 结束，或执行 `tmux -L "$SOCK" kill-server` 清理全部验证会话。
+完成后优先让 Pi 调用 `steward_probe_finish` 结束本次测试会话。确需清理整个测试 server 时，先确认 `$SOCK` 仍为 `steward-test`，并用 `tmux -L "$SOCK" ls` 核对仅含本次创建的验证会话，再执行 `tmux -L "$SOCK" kill-server`。这会结束该测试 server 上的所有会话；不得用于正式 `steward`、默认 tmux 或其他会话。
 
 ## 补充：启动器环境下的 PATH
 
-正式启动器由 LaunchAgent 托管，环境比终端精简。用最小环境重复一次 V1 的启动，确认启动器需要准备哪些 PATH：
+正式启动器由 LaunchAgent 托管，环境比终端精简。下列 P-1 保持使用另一个测试专用 socket `steward-minimal`；启动、查询和清理只针对该测试 server，执行前确认没有其他使用者。历史结果显示还需在 PATH 加入实际 Node 目录，按当前工具位置核对后再运行：
 
 ```bash
 env -i HOME="$HOME" USER="$USER" PATH="$(dirname "$(command -v pi)"):/usr/bin:/bin:/usr/sbin:/sbin" \

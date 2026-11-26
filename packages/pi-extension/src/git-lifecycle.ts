@@ -77,9 +77,10 @@ export async function prepareGit(data: c.AgentContextResponse, taskBranch: strin
         try { await git(repositoryPath, 'fetch', '--no-tags', '--', remote, merge); }
         catch { throw new AgentError('git_fetch_failed'); }
         const target = c.gitCommitSchema.parse(await git(repositoryPath, 'rev-parse', '--verify', 'FETCH_HEAD'));
-        if (await isAncestor(repositoryPath, baseCommit, target)) {
-          if (checked.length) await git(checked[0]!.path, 'merge', '--ff-only', '--no-edit', target);
-          else await git(repositoryPath, 'update-ref', ref, target, baseCommit);
+        if (baseCommit !== target && await isAncestor(repositoryPath, baseCommit, target)) {
+          // 重新读取检出状态；只推进明确 ref，不向其他工作树的 HEAD/index 写入。
+          if ((await worktrees(repositoryPath)).some((entry) => entry.branch === ref)) throw new AgentError('git_base_checked_out');
+          await git(repositoryPath, 'update-ref', ref, target, baseCommit);
           baseCommit = target;
         } else if (!await isAncestor(repositoryPath, target, baseCommit)) throw new AgentError('git_upstream_diverged');
         syncResult = 'synced';

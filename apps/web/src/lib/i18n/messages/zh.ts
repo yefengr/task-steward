@@ -47,6 +47,8 @@ export const zh: Messages = {
     taskBaseBranch: '任务基准分支', inheritDefault: '继承项目默认（{branch}）', noDefault: '项目尚未配置默认分支',
     taskBaseBranchHelp: '留空继承项目默认；任务开始后不能修改。',
     branchLocked: '任务已开始，基准分支已锁定。',
+    firstSelectionHelp: '此任务开工时尚未选择基准分支。请明确补选；同步选项以保存时项目当前设置为准，保存后分支与同步选项一并锁定。',
+    targetCheckedOut: '基准分支仍在其他工作树中检出。请该工作树的所有者先切换到其他分支，再重试；不要强制重置或删除该工作树。',
     reviewGroup: '待验收与集成',
     locked: '集成操作进行中，完成前不能取消或恢复任务。',
     retryMerge: '重试合并', retryMergeHint: '重新尝试把已验收提交快进合并到基准分支。',

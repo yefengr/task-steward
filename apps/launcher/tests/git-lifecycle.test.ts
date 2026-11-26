@@ -9,8 +9,21 @@ import { GitLifecycle } from '../src/git-lifecycle.js';
 import { cleanupAccepted, mergeAccepted, verifySource } from '../src/git-native.js';
 import { PlatformError, type Platform } from '../src/platform.js';
 import { loadState, saveState } from '../src/state.js';
+const race = vi.hoisted(() => ({ beforeUpdate: undefined as (() => void) | undefined }));
+vi.mock('node:util', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:util')>();
+  return { ...actual, promisify: (fn: Parameters<typeof actual.promisify>[0]) => {
+    const run = actual.promisify(fn);
+    return (...args: unknown[]) => {
+      if (Array.isArray(args[1]) && args[1].includes('update-ref') && race.beforeUpdate) {
+        const action = race.beforeUpdate; race.beforeUpdate = undefined; action();
+      }
+      return run(...args);
+    };
+  } };
+});
 const dirs: string[] = [];
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { race.beforeUpdate = undefined; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function g(root: string, ...args: string[]) { return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_'))) }).trim(); }
 function commit(root: string, name: string) { writeFileSync(join(root, name), name); g(root, 'add', name); g(root, 'commit', '-qm', name); return g(root, 'rev-parse', 'HEAD'); }
@@ -19,6 +32,7 @@ function fixture() {
   const root = join(dir, 'repo'); mkdirSync(root); g(root, 'init', '-qb', 'main');
   g(root, 'config', 'user.name', 'test'); g(root, 'config', 'user.email', 'test@example.invalid');
   const base = commit(root, 'base'); const source = join(dir, 'source');
+  g(root, 'checkout', '-qb', 'maintenance');
   g(root, 'worktree', 'add', '-b', 'feature/task', source, base);
   const marker = join(g(source, 'rev-parse', '--absolute-git-dir'), 'pi-worktree-manager.json');
   writeFileSync(marker, JSON.stringify({ schemaVersion: 1, createdAt: new Date().toISOString() }));
@@ -64,12 +78,47 @@ it('in-use process blocks source cleanup', async () => {
 });
 it('exact FF succeeds and an already accepted ancestor preserves later base commits', async () => {
   const x = fixture(); await mergeAccepted(x.operation); expect(g(x.root, 'rev-parse', 'main')).toBe(x.accepted);
-  const later = commit(x.root, 'later'); await mergeAccepted(x.operation); expect(g(x.root, 'rev-parse', 'main')).toBe(later);
+  g(x.root, 'checkout', 'main'); const later = commit(x.root, 'later'); g(x.root, 'checkout', 'maintenance');
+  await mergeAccepted(x.operation); expect(g(x.root, 'rev-parse', 'main')).toBe(later);
   await cleanupAccepted(x.operation, false, () => {}); expect(existsSync(x.source)).toBe(false);
   expect(g(x.root, 'rev-parse', 'main')).toBe(later);
 });
+it('checked-out base blocks advancement without changing refs or checkout files; already merged is a no-op', async () => {
+  const x = fixture(); g(x.root, 'checkout', 'main');
+  await x.start().apply(x.operation, false);
+  expect(x.reportGit.mock.lastCall?.[1]).toMatchObject({ outcome: 'blocked', message: 'git_target_checked_out' });
+  expect(g(x.root, 'rev-parse', 'main')).toBe(x.base);
+  expect(g(x.root, 'rev-parse', 'feature/task')).toBe(x.accepted);
+  expect(g(x.root, 'symbolic-ref', 'HEAD')).toBe('refs/heads/main');
+  expect(g(x.root, 'status', '--porcelain')).toBe('');
+  expect(existsSync(join(x.root, 'accepted'))).toBe(false);
+  g(x.root, 'merge', '--ff-only', x.accepted);
+  await expect(mergeAccepted(x.operation)).resolves.toBeUndefined();
+  expect(g(x.root, 'rev-parse', 'main')).toBe(x.accepted);
+});
+it('explicit ref update never changes the maintenance branch or its files', async () => {
+  const x = fixture(); const maintenance = commit(x.root, 'maintenance-only');
+  await mergeAccepted(x.operation);
+  expect(g(x.root, 'rev-parse', 'main')).toBe(x.accepted);
+  expect(g(x.root, 'rev-parse', 'HEAD')).toBe(maintenance);
+  expect(g(x.root, 'symbolic-ref', 'HEAD')).toBe('refs/heads/maintenance');
+  expect(g(x.root, 'status', '--porcelain')).toBe('');
+  expect(existsSync(join(x.root, 'maintenance-only'))).toBe(true);
+  expect(existsSync(join(x.root, 'accepted'))).toBe(false);
+});
+it('CAS rejects a concurrent base ref advance without overwriting it or the checkout', async () => {
+  const x = fixture(); const concurrent = commit(x.root, 'concurrent');
+  race.beforeUpdate = () => g(x.root, 'update-ref', 'refs/heads/main', concurrent, x.base);
+  await expect(mergeAccepted(x.operation)).rejects.toMatchObject({ reason: 'git_command_failed' });
+  expect(race.beforeUpdate).toBeUndefined();
+  expect(g(x.root, 'rev-parse', 'main')).toBe(concurrent);
+  expect(g(x.root, 'rev-parse', 'feature/task')).toBe(x.accepted);
+  expect(g(x.root, 'rev-parse', 'HEAD')).toBe(concurrent);
+  expect(g(x.root, 'status', '--porcelain')).toBe('');
+  expect(existsSync(join(x.root, 'accepted'))).toBe(false);
+});
 it('diverged target requests rework without modifying either branch', async () => {
-  const x = fixture(); const head = commit(x.root, 'diverge');
+  const x = fixture(); g(x.root, 'checkout', 'main'); const head = commit(x.root, 'diverge'); g(x.root, 'checkout', 'maintenance');
   await x.start().apply(x.operation, false);
   expect(x.reportGit.mock.calls[0]?.[1]).toMatchObject({ outcome: 'needs_rework', message: 'git_target_diverged' });
   expect(g(x.root, 'rev-parse', 'main')).toBe(head); expect(existsSync(x.source)).toBe(true);
@@ -108,7 +157,8 @@ it('partial cleanup never deletes a branch changed after removal', async () => {
   const x = fixture(); await x.start().apply(x.operation, false);
   const state = loadState(x.file); state.gitOperations![0]!.cleanupIssued = true; saveState(x.file, state);
   g(x.root, 'worktree', 'remove', x.source);
-  const later = commit(x.root, 'late-base'); g(x.root, 'update-ref', 'refs/heads/feature/task', later, x.accepted);
+  g(x.root, 'checkout', 'main'); const later = commit(x.root, 'late-base'); g(x.root, 'checkout', 'maintenance');
+  g(x.root, 'update-ref', 'refs/heads/feature/task', later, x.accepted);
   await x.start().apply({ ...x.operation, id: randomUUID(), phase: 'cleanup', mergedCommit: x.accepted }, false);
   expect(x.reportGit.mock.lastCall?.[1]).toMatchObject({ outcome: 'blocked', message: 'git_branch_changed' });
   expect(g(x.root, 'rev-parse', 'refs/heads/feature/task')).toBe(later);

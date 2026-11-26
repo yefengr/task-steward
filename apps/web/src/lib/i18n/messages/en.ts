@@ -46,6 +46,8 @@ export const en = {
     taskBaseBranch: 'Task base branch', inheritDefault: 'Inherit project default ({branch})', noDefault: 'No project default configured',
     taskBaseBranchHelp: 'Leave empty to inherit the project default. The branch is fixed once the task starts.',
     branchLocked: 'The base branch is locked after the task starts.',
+    firstSelectionHelp: 'No base branch was selected when this task started. Choose it explicitly; syncing uses the project setting at save time. Both choices are then locked.',
+    targetCheckedOut: 'The base branch is checked out in another worktree. Ask its owner to switch that checkout to another branch before retrying. Do not force-reset or delete it.',
     reviewGroup: 'Review and integration',
     locked: 'An integration operation is running. The task cannot be cancelled or restored until it finishes.',
     retryMerge: 'Retry merge', retryMergeHint: 'Fast-forwards the approved commit onto the base branch again.',

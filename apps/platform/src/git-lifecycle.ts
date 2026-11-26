@@ -27,9 +27,12 @@ export function resolvedGitSettings(store: Store, taskId: string) {
   const task = requireTask(store, taskId);
   const frozen = gitState(store, taskId);
   if (frozen) return { baseBranch: frozen.baseBranch, syncBeforeStart: frozen.syncBeforeStart };
+  // git_sync_before_start 非 null 表示领取时已冻结；基准保留当时选择（可能是 null），不继承后来修改的项目默认。
+  if (task.git_sync_before_start !== null) {
+    return { baseBranch: task.base_branch, syncBeforeStart: !!task.git_sync_before_start };
+  }
   const settings = projectGitSettings(store, task.project_id);
-  return { baseBranch: task.base_branch ?? settings.baseBranch,
-    syncBeforeStart: task.git_sync_before_start === null ? settings.syncBeforeStart : !!task.git_sync_before_start };
+  return { baseBranch: task.base_branch ?? settings.baseBranch, syncBeforeStart: settings.syncBeforeStart };
 }
 export function freezeGitSettings(store: Store, taskId: string) {
   const task = requireTask(store, taskId);

@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import type { AgentContextResponse, TaskGit } from '@pi-steward/contract';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { prepareGit, proveWorkspace, repositoryLock } from '../src/git-lifecycle.js';
 import { lockRepository } from '../../../apps/launcher/src/git-native.js';
 
@@ -20,8 +20,21 @@ it('extension uses launcher SQLite lock path and releases on completion', async 
   });
   await expect(repositoryLock(x.root, async () => true)).resolves.toBe(true);
 });
+const race = vi.hoisted(() => ({ beforeUpdate: undefined as (() => void) | undefined }));
+vi.mock('node:util', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:util')>();
+  return { ...actual, promisify: (fn: Parameters<typeof actual.promisify>[0]) => {
+    const run = actual.promisify(fn);
+    return (...args: unknown[]) => {
+      if (Array.isArray(args[1]) && args[1].includes('update-ref') && race.beforeUpdate) {
+        const action = race.beforeUpdate; race.beforeUpdate = undefined; action();
+      }
+      return run(...args);
+    };
+  } };
+});
 const dirs: string[] = [];
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { race.beforeUpdate = undefined; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function g(root: string, ...args: string[]) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
   return execFileSync('git', ['-C', root, ...args], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -32,6 +45,7 @@ function fixture() {
   const root = join(dir, 'repo'); mkdirSync(root); g(root, 'init', '-qb', 'main');
   g(root, 'config', 'user.name', 'test'); g(root, 'config', 'user.email', 'test@example.invalid');
   const base = commit(root, 'base');
+  g(root, 'checkout', '-qb', 'maintenance');
   const data: AgentContextResponse = { task: { id: randomUUID(), projectId: 'p', title: 't', goal: '', acceptance: '', notes: '', type: 'implementation' },
     attempt: { id: randomUUID(), kind: 'new' }, workspace: { path: root, requirements: [] }, decisions: [], deliveries: [], questions: [],
     gitSettings: { baseBranch: 'main', syncBeforeStart: true } };
@@ -47,10 +61,12 @@ it.each(['remote-ahead', 'local-ahead', 'diverged', 'no-upstream', 'disabled', '
       g(other, 'config', 'user.name', 'test'); g(other, 'config', 'user.email', 'test@example.invalid');
       expected = commit(other, 'remote'); g(other, 'push', 'origin', 'main');
     }
-    if (mode === 'local-ahead' || mode === 'diverged') expected = commit(x.root, 'local');
+    if (mode === 'local-ahead' || mode === 'diverged') {
+      g(x.root, 'checkout', 'main'); expected = commit(x.root, 'local'); g(x.root, 'checkout', 'maintenance');
+    }
     if (mode === 'disabled') { x.data.gitSettings!.syncBeforeStart = false; }
     if (mode === 'disabled' || mode === 'fetch-failed') g(x.root, 'remote', 'set-url', 'origin', '/missing/local-upstream');
-    if (mode === 'dirty') writeFileSync(join(x.root, 'dirty'), 'keep');
+    if (mode === 'dirty') { g(x.root, 'checkout', 'main'); writeFileSync(join(x.root, 'dirty'), 'keep'); }
   }
   if (mode === 'fetch-failed' || mode === 'dirty') {
     await expect(prepareGit(x.data, 'feature/task')).rejects.toMatchObject({ code: mode === 'dirty' ? 'git_dirty' : 'git_fetch_failed' });
@@ -64,6 +80,57 @@ it.each(['remote-ahead', 'local-ahead', 'diverged', 'no-upstream', 'disabled', '
   expect(prepared.baseCommit).toBe(expected);
   expect(prepared.syncResult).toBe(mode === 'disabled' ? 'disabled' : mode === 'no-upstream' ? 'no_upstream' : 'synced');
   expect(g(x.root, 'rev-parse', 'main')).toBe(expected);
+});
+it.each(['main', 'linked'] as const)('remote advancement blocks when base is checked out in %s', async (checkout) => {
+  const x = fixture(); const bare = join(x.dir, 'upstream.git'); g(x.root, 'init', '--bare', bare);
+  g(x.root, 'remote', 'add', 'origin', bare); g(x.root, 'push', '-u', 'origin', 'main');
+  const other = join(x.dir, 'other'); g(x.root, 'clone', '-b', 'main', bare, other);
+  g(other, 'config', 'user.name', 'test'); g(other, 'config', 'user.email', 'test@example.invalid');
+  const remote = commit(other, 'remote'); g(other, 'push', 'origin', 'main');
+  const target = checkout === 'main' ? x.root : join(x.dir, 'base-checkout');
+  if (checkout === 'main') g(x.root, 'checkout', 'main');
+  else g(x.root, 'worktree', 'add', target, 'main');
+  const maintenance = g(x.root, 'rev-parse', 'maintenance');
+  await expect(prepareGit(x.data, 'feature/task')).rejects.toMatchObject({ code: 'git_base_checked_out' });
+  expect(g(x.root, 'rev-parse', 'main')).toBe(x.base);
+  expect(g(x.root, 'rev-parse', 'maintenance')).toBe(maintenance);
+  expect(g(target, 'rev-parse', 'HEAD')).toBe(x.base);
+  expect(g(target, 'status', '--porcelain')).toBe('');
+  expect(existsSync(join(target, 'remote'))).toBe(false);
+  // 由维护者主动推进后，同一已检出目录允许安全 no-op。
+  g(target, 'merge', '--ff-only', remote);
+  await expect(prepareGit(x.data, 'feature/task')).resolves.toMatchObject({ baseCommit: remote, syncResult: 'synced' });
+});
+it('sync advances only the base ref, not an unrelated checked-out branch or its files', async () => {
+  const x = fixture(); const bare = join(x.dir, 'upstream.git'); g(x.root, 'init', '--bare', bare);
+  g(x.root, 'remote', 'add', 'origin', bare); g(x.root, 'push', '-u', 'origin', 'main');
+  const other = join(x.dir, 'other'); g(x.root, 'clone', '-b', 'main', bare, other);
+  g(other, 'config', 'user.name', 'test'); g(other, 'config', 'user.email', 'test@example.invalid');
+  const remote = commit(other, 'remote'); g(other, 'push', 'origin', 'main');
+  const maintenance = commit(x.root, 'maintenance-only');
+  await expect(prepareGit(x.data, 'feature/task')).resolves.toMatchObject({ baseCommit: remote });
+  expect(g(x.root, 'rev-parse', 'main')).toBe(remote);
+  expect(g(x.root, 'rev-parse', 'HEAD')).toBe(maintenance);
+  expect(g(x.root, 'symbolic-ref', 'HEAD')).toBe('refs/heads/maintenance');
+  expect(g(x.root, 'status', '--porcelain')).toBe('');
+  expect(existsSync(join(x.root, 'maintenance-only'))).toBe(true);
+  expect(existsSync(join(x.root, 'remote'))).toBe(false);
+});
+it('sync CAS rejects a concurrent base change without overwriting any branch or files', async () => {
+  const x = fixture(); const bare = join(x.dir, 'upstream.git'); g(x.root, 'init', '--bare', bare);
+  g(x.root, 'remote', 'add', 'origin', bare); g(x.root, 'push', '-u', 'origin', 'main');
+  const other = join(x.dir, 'other'); g(x.root, 'clone', '-b', 'main', bare, other);
+  g(other, 'config', 'user.name', 'test'); g(other, 'config', 'user.email', 'test@example.invalid');
+  commit(other, 'remote'); g(other, 'push', 'origin', 'main');
+  const concurrent = commit(x.root, 'concurrent');
+  race.beforeUpdate = () => g(x.root, 'update-ref', 'refs/heads/main', concurrent, x.base);
+  await expect(prepareGit(x.data, 'feature/task')).rejects.toBeDefined();
+  expect(race.beforeUpdate).toBeUndefined();
+  expect(g(x.root, 'rev-parse', 'main')).toBe(concurrent);
+  expect(g(x.root, 'rev-parse', 'HEAD')).toBe(concurrent);
+  expect(g(x.root, 'symbolic-ref', 'HEAD')).toBe('refs/heads/maintenance');
+  expect(g(x.root, 'status', '--porcelain')).toBe('');
+  expect(existsSync(join(x.root, 'remote'))).toBe(false);
 });
 it('snapshot delivery proves canonical owned linked branch, exact SHA, clean tree and durable session', async () => {
   const x = fixture(); const linked = join(x.dir, 'linked');

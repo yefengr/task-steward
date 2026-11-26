@@ -39,6 +39,7 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
       code === 'git_repository_busy' ? '仓库正在执行其他 Git 操作；待其完成后重试，不要删除锁文件。' :
       code === 'git_upstream_diverged' ? '基准分支与上游分叉；请用户协调基准分支，不要 reset 或强制同步。' :
       code === 'git_dirty' ? '基准工作树有未提交修改；请保留并由其所有者处理后再准备。' :
+      code === 'git_base_checked_out' ? '同步需要推进基准分支，但它仍在其他工作树检出；请维护者将该非任务目录切换到其他分支后重试，不要强制 detach、reset 或删除。' :
       code === 'git_fetch_failed' ? '上游获取失败；检查远端配置、网络和权限后再准备。' :
       code === 'git_invalid_branch' || code === 'git_upstream_invalid' || code === 'git_invalid_ref' ? '分支或上游引用无效；核对 Git 配置和原生分支名称后再准备。' :
       code === 'git_worktree_locked' ? '工作树已锁定；请其所有者确认用途，不要强制解锁或删除。' :

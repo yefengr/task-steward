@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { TaskStatus, WebCreateTaskRequest, WebUpdateTaskRequest } from '@pi-steward/contract';
 import { reject } from './errors.js';
-import { acceptGit, gitLocked, gitState } from './git-lifecycle.js';
+import { acceptGit, gitLocked, gitState, projectGitSettings } from './git-lifecycle.js';
 import { requireNoPendingSessionOperation } from './session-control.js';
 import type { Store } from './store.js';
 import { activeAttempt, executionMachine, requireMachine, requireProject, requireTask, taskView } from './views.js';
@@ -48,8 +48,18 @@ export function updateTask(store: Store, id: string, input: WebUpdateTaskRequest
   if (input.agent === 'claude') reject('invalid_request', 'Claude tasks are not supported');
   if (input.machineId) requireMachine(store, input.machineId);
   if (input.baseBranch !== undefined && input.baseBranch !== task.base_branch) {
-    if (gitState(store, id) || store.get('SELECT 1 FROM attempts WHERE task_id=?', id)) reject('conflict', 'Base branch is frozen after execution starts');
+    const frozen = task.git_sync_before_start !== null;
+    // 仅在已领取、尚无 Git 快照且冻结基准为 null 时，允许用户显式补选第一个非空基准，
+    // 并同时采纳当前项目同步设置，避免基准与同步来自不同时点。
+    const firstChoice = frozen && task.base_branch === null && input.baseBranch !== null && !gitState(store, id);
+    if ((frozen && !firstChoice) || (!frozen && (gitState(store, id) || store.get('SELECT 1 FROM attempts WHERE task_id=?', id)))) {
+      reject('conflict', 'Base branch is frozen after execution starts');
+    }
     store.run('UPDATE tasks SET base_branch=? WHERE id=?', input.baseBranch, id);
+    if (firstChoice) {
+      store.run('UPDATE tasks SET git_sync_before_start=? WHERE id=?',
+        Number(projectGitSettings(store, task.project_id).syncBeforeStart), id);
+    }
   }
   const fields = Object.keys(input).filter((key) => key !== 'version');
   store.run(`UPDATE tasks SET title=?, goal=?, acceptance=?, notes=?, agent=?, machine_id=?,

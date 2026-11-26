@@ -75,11 +75,40 @@ it('首次领取即冻结基准与同步选择，prepare前修改项目默认也
   await settings(x, { baseBranch: 'develop', syncBeforeStart: false, version: 2 });
   expect((await context(x, attempt.id)).gitSettings).toEqual({ baseBranch: 'main', syncBeforeStart: true });
   expect((await x.detail(task.id)).task.baseBranch).toBe('main');
+  const running = (await x.detail(task.id)).task;
+  await errorCode(await x.web(`/tasks/${task.id}`, { baseBranch: 'release', version: running.version }, 'PATCH'), 409, 'conflict');
   expect((await x.agent(attempt.id, '/git/prepare', request(preparation))).status).toBe(200);
   const next = await x.create();
   await x.action(next.id, 'schedule');
   const nextAttempt = await x.claimed();
   expect((await context(x, nextAttempt.id)).gitSettings).toEqual({ baseBranch: 'develop', syncBeforeStart: false });
+});
+
+it('领取时项目基准为null不自动继承后来默认；显式首次选择同时锁定当前同步，之后不可再改', async () => {
+  const x = await setup();
+  await x.heartbeat(3);
+  const task = await x.create();
+  await x.action(task.id, 'schedule');
+  const attempt = await x.claimed();
+  expect((await x.detail(task.id)).task.baseBranch).toBeNull();
+  expect((await context(x, attempt.id)).gitSettings).toEqual({ baseBranch: null, syncBeforeStart: true });
+  expect((await settings(x, { baseBranch: 'main', syncBeforeStart: false, version: 1 })).status).toBe(200);
+  expect((await context(x, attempt.id)).gitSettings).toEqual({ baseBranch: null, syncBeforeStart: true });
+  await errorCode(await x.agent(attempt.id, '/git/prepare', request(preparation)), 409, 'conflict');
+  const current = (await x.detail(task.id)).task;
+  expect((await x.web(`/tasks/${task.id}`, { baseBranch: 'main', version: current.version }, 'PATCH')).status).toBe(200);
+  expect((await context(x, attempt.id)).gitSettings).toEqual({ baseBranch: 'main', syncBeforeStart: false });
+  const chosen = (await x.detail(task.id)).task;
+  await errorCode(await x.web(`/tasks/${task.id}`, { baseBranch: 'develop', version: chosen.version }, 'PATCH'), 409, 'conflict');
+  await errorCode(await x.web(`/tasks/${task.id}`, { baseBranch: null, version: chosen.version }, 'PATCH'), 409, 'conflict');
+  const input = request({ ...preparation, baseBranch: 'main', syncBeforeStart: false, syncResult: 'disabled' });
+  expect((await x.agent(attempt.id, '/git/prepare', input)).status).toBe(200);
+  expect((await context(x, attempt.id)).gitSettings).toEqual({ baseBranch: 'main', syncBeforeStart: false });
+  expect((await settings(x, { baseBranch: 'changed', syncBeforeStart: true, version: 2 })).status).toBe(200);
+  const preparedTask = (await x.detail(task.id)).task;
+  await errorCode(await x.web(`/tasks/${task.id}`, { baseBranch: 'other', version: preparedTask.version }, 'PATCH'), 409, 'conflict');
+  await errorCode(await x.web(`/tasks/${task.id}`, { baseBranch: null, version: preparedTask.version }, 'PATCH'), 409, 'conflict');
+  expect((await context(x, attempt.id)).gitSettings).toEqual({ baseBranch: 'main', syncBeforeStart: false });
 });
 
 it('prepare拒绝未配置/讨论任务与重复分支，现场必须专属linked根且交付精确匹配冻结base', async () => {
@@ -88,6 +117,11 @@ it('prepare拒绝未配置/讨论任务与重复分支，现场必须专属linke
   const legacy = await x.create(); await x.action(legacy.id, 'schedule'); const a = await x.claimed();
   await errorCode(await x.agent(a.id, '/git/prepare', request(preparation)), 409, 'conflict');
   await settings(x, { baseBranch: 'main', syncBeforeStart: true, version: 1 });
+  // 领取时项目未配置基准，之后不能自动采用新默认；须由用户显式首次选择。
+  expect((await context(x, a.id)).gitSettings).toEqual({ baseBranch: null, syncBeforeStart: true });
+  await errorCode(await x.agent(a.id, '/git/prepare', request(preparation)), 409, 'conflict');
+  const legacyTask = (await x.detail(legacy.id)).task;
+  expect((await x.web(`/tasks/${legacy.id}`, { baseBranch: 'main', version: legacyTask.version }, 'PATCH')).status).toBe(200);
   expect((await x.agent(a.id, '/git/prepare', request(preparation))).status).toBe(200);
   for (const invalid of [{ ...workspace, gitKind: 'primary' }, { ...workspace, gitBranch: 'main' },
     { ...workspace, gitRoot: project.path }, { ...workspace, path: '/unrelated' }]) {

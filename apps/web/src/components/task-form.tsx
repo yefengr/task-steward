@@ -88,9 +88,10 @@ export function TaskForm(props: FormProps) {
   const selectedProject = props.projects.find((project) => project.id === projectId);
   const defaultBranch = selectedProject?.gitSettings?.baseBranch ?? null;
   const showBaseBranch = (baseTask?.type ?? draft.type) === 'implementation';
-  // 已开始或已冻结快照的任务不能改基准分支；服务端仍做最终校验。
-  const baseBranchLocked = Boolean(props.currentTask) && (Boolean(props.currentTask!.git)
-    || (props.currentTask!.status !== 'unscheduled' && props.currentTask!.status !== 'queued'));
+  const started = Boolean(props.currentTask) && props.currentTask!.status !== 'unscheduled' && props.currentTask!.status !== 'queued';
+  // 领取时尚未选分支的任务允许显式补第一次选择；已有选择或 Git 快照仍保持锁定。
+  const firstSelection = started && !props.currentTask!.git && props.currentTask!.baseBranch == null;
+  const baseBranchLocked = Boolean(props.currentTask?.git) || (started && !firstSelection);
   const baseBranchEditable = showBaseBranch && !baseBranchLocked;
   const baseBranchDirty = (draft.baseBranch?.trim() || null) !== (baseTask?.baseBranch ?? null);
   const fields: EditableField[] = baseTask
@@ -164,8 +165,9 @@ export function TaskForm(props: FormProps) {
         }} data={[{ value: 'implementation', label: t.taskTypes.implementation }, { value: 'discussion', label: t.taskTypes.discussion }]} />}
         {showBaseBranch && (baseBranchEditable
           ? <TextInput label={t.git.taskBaseBranch} value={draft.baseBranch ?? ''}
-            placeholder={defaultBranch ? t.git.inheritDefault.replace('{branch}', defaultBranch) : t.git.noDefault}
-            description={t.git.taskBaseBranchHelp} error={branchInvalid ? t.git.invalidBranch : undefined}
+            placeholder={firstSelection ? t.git.branchPlaceholder : defaultBranch ? t.git.inheritDefault.replace('{branch}', defaultBranch) : t.git.noDefault}
+            description={firstSelection ? t.git.firstSelectionHelp : t.git.taskBaseBranchHelp}
+            error={branchInvalid ? t.git.invalidBranch : undefined}
             onChange={(event) => { const baseBranch = event.currentTarget.value; setDraft((value) => ({ ...value, baseBranch })); }} />
           : <TextInput label={t.git.taskBaseBranch} disabled description={t.git.branchLocked}
             value={props.currentTask?.git?.baseBranch ?? draft.baseBranch ?? defaultBranch ?? ''} />)}

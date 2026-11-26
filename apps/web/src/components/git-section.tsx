@@ -11,7 +11,7 @@ export function GitSection({ task }: { task: Task }) {
   return <section className="detail-section git-section">
     <h2 tabIndex={-1}>{t.git.section}</h2>
     {git.message && <p role={blocked ? 'alert' : undefined} className={`callout${blocked ? ' warning' : ' neutral'}`}>
-      {git.message}</p>}
+      {git.message === 'git_target_checked_out' ? t.git.targetCheckedOut : git.message}</p>}
     <dl className="kv">
       <dt>{t.git.phase}</dt><dd>{t.git.phases[git.phase]}</dd>
       <dt>{t.git.baseBranch}</dt><dd><code>{git.baseBranch}</code></dd>

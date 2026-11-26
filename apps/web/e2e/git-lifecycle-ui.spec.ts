@@ -17,6 +17,7 @@ const mergedCommit = '3'.repeat(40);
 const awaitingId = randomUUID();
 const blockedId = randomUUID();
 const queuedId = randomUUID();
+const unsetId = randomUUID();
 const contentTypes: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
   '.svg': 'image/svg+xml', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
@@ -69,6 +70,7 @@ const blockedTask = makeTask({
   git: makeGit('cleanup_blocked', { mergedCommit, message: '任务工作树仍有未提交改动。' }),
 });
 const queuedTask = makeTask({ id: queuedId, title: '未开始任务', status: 'queued', position: 3 });
+const unsetTask = makeTask({ id: unsetId, title: '开工时缺少基准分支', status: 'running', position: 4 });
 
 const delivery = (task: Task): Delivery => ({
   id: randomUUID(), taskId: task.id, attemptId: randomUUID(), version: 1, summary: '已验证的交付',
@@ -84,14 +86,14 @@ const detail = (task: Task) => ({
 function project(settings: ProjectGitSettings): WebProject {
   return {
     id: projectId, name: projectName, lastMachineId: null, createdAt: 1, gitSettings: settings,
-    counts: { unscheduled: 0, queued: 1, running: 0, review: 2, done: 0, interrupted: 0, cancelled: 0 },
+    counts: { unscheduled: 0, queued: 1, running: 1, review: 2, done: 0, interrupted: 0, cancelled: 0 },
   };
 }
 
 async function mockPlatform(page: import('@playwright/test').Page) {
   const state = {
     settings: { baseBranch: null, syncBeforeStart: true, version: 1 } as ProjectGitSettings,
-    tasks: new Map<string, Task>([[awaitingId, awaitingTask], [blockedId, blockedTask], [queuedId, queuedTask]]),
+    tasks: new Map<string, Task>([[awaitingId, awaitingTask], [blockedId, blockedTask], [queuedId, queuedTask], [unsetId, unsetTask]]),
     patchBody: undefined as unknown, createBody: undefined as unknown, retryCalls: 0, conflictNext: false,
   };
   await page.route('**/api/v1/web/**', async (route) => {
@@ -135,6 +137,15 @@ async function mockPlatform(page: import('@playwright/test').Page) {
     if (taskDetail && method === 'GET') {
       const task = state.tasks.get(decodeURIComponent(taskDetail[1]!));
       return task ? json(detail(task)) : json({ error: { code: 'not_found', message: 'missing' } }, 404);
+    }
+    if (taskDetail && method === 'PATCH') {
+      const task = state.tasks.get(decodeURIComponent(taskDetail[1]!));
+      if (!task) return json({ error: { code: 'not_found', message: 'missing' } }, 404);
+      const body = request.postDataJSON() as { version: number; baseBranch: string | null };
+      if (body.version !== task.version) return json({ error: { code: 'conflict', message: 'stale task' } }, 409);
+      const updated = { ...task, baseBranch: body.baseBranch, version: task.version + 1 };
+      state.tasks.set(task.id, updated);
+      return json({ task: updated });
     }
     return json({ error: { code: 'not_found', message: `unmocked ${method} ${path}` } }, 404);
   });
@@ -289,4 +300,35 @@ test('弹窗打开后远端设置更新时仍按冻结版本保存并保留草�
   expect((await reopened).postDataJSON()).toEqual({ baseBranch: 'next', syncBeforeStart: true, version: 3 });
   await expect(dialog).toBeHidden();
   await expect(page.locator('.project-git-summary')).toContainText('next');
+});
+
+test('已领取但未选择基准的任务只接受显式首次补选，完成后锁定', async ({ page }) => {
+  const state = await mockPlatform(page);
+  state.settings = { baseBranch: 'main', syncBeforeStart: false, version: 2 };
+  await page.goto(`${origin}/tasks/${unsetId}`);
+  await page.getByRole('button', { name: '编辑任务', exact: true }).click();
+  let dialog = page.getByRole('dialog');
+  const input = dialog.getByLabel('任务基准分支');
+  await expect(input).toBeEnabled();
+  await expect(input).toHaveValue('');
+  await expect(input).toHaveAttribute('placeholder', '例如 main');
+  await expect(dialog).toContainText('同步选项以保存时项目当前设置为准');
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeDisabled();
+  await input.fill('release/2.0');
+  const patched = page.waitForRequest((request) => request.method() === 'PATCH' && request.url().endsWith(`/tasks/${unsetId}`));
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  expect((await patched).postDataJSON()).toEqual({ baseBranch: 'release/2.0', version: 1 });
+  await expect(dialog).toBeHidden();
+  await page.getByRole('button', { name: '编辑任务', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('任务基准分支')).toBeDisabled();
+  await expect(dialog.getByLabel('任务基准分支')).toHaveValue('release/2.0');
+});
+
+test('基准已检出的合并受阻提供维护者操作提示', async ({ page }) => {
+  const state = await mockPlatform(page);
+  state.tasks.set(awaitingId, { ...awaitingTask, git: { ...awaitingTask.git!, phase: 'merge_blocked', message: 'git_target_checked_out' } });
+  await page.goto(`${origin}/tasks/${awaitingId}`);
+  await expect(page.locator('.git-section [role="alert"]')).toContainText('请该工作树的所有者先切换到其他分支');
+  await expect(page.getByRole('button', { name: '重试合并', exact: true })).toBeVisible();
 });

@@ -103,12 +103,9 @@ export async function mergeAccepted(op: LauncherGitOperation) {
   if (!await ancestor(root, op.baseCommit, head) || !await ancestor(root, head, op.approvedCommit)) throw new GitFailure('git_target_diverged', true);
   const checked = (await records(root)).filter((entry) => entry.branch === ref);
   if (checked.length > 1 || checked.some((entry) => entry.unsafe)) throw new GitFailure('git_target_occupied');
-  if (checked.length) {
-    const target = checked[0]!.path;
-    await clean(target); await unused(target);
-    if (await git(target, 'rev-parse', 'HEAD') !== head) throw new GitFailure('git_target_changed');
-    await git(target, 'merge', '--ff-only', '--no-edit', op.approvedCommit);
-  } else await git(root, 'update-ref', ref, op.approvedCommit, head);
+  // 不向其他检出目录写入；外部切换分支也不能把更新重定向到其 HEAD。
+  if (checked.length) throw new GitFailure('git_target_checked_out');
+  await git(root, 'update-ref', ref, op.approvedCommit, head);
   if (await git(root, 'rev-parse', '--verify', ref) !== op.approvedCommit) throw new GitFailure('git_target_changed');
 }
 export async function cleanupAccepted(op: LauncherGitOperation, removed: boolean, checkpoint: () => void) {

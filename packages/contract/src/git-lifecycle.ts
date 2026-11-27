@@ -36,6 +36,7 @@ export const agentPrepareGitRequestSchema = requestIdSchema.extend({
 export const agentPrepareGitResponseSchema = z.strictObject({ git: taskGitSchema });
 export const launcherGitOperationSchema = z.strictObject({
   id: uuidSchema, taskId: uuidSchema, projectId: projectIdSchema, deliveryId: uuidSchema,
+  sourceAttemptId: uuidSchema.optional(),
   baseBranch: gitBranchSchema, baseCommit: gitCommitSchema, taskBranch: gitBranchSchema,
   repositoryPath: gitPathSchema, worktreePath: gitPathSchema, approvedCommit: gitCommitSchema,
   mergedCommit: gitCommitSchema.nullable(), phase: z.enum(['merge', 'cleanup']),

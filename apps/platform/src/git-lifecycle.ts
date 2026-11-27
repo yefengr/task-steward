@@ -116,7 +116,8 @@ export function acceptGit(store: Store, taskId: string, deliveryId: string) {
   const delivery = store.get<{ commit: string; attempt_id: string }>('SELECT "commit", attempt_id FROM deliveries WHERE id=? AND task_id=?', deliveryId, taskId)!;
   if (!git.worktreePath || !['ready', 'needs_rework'].includes(git.phase)) reject('conflict', 'Git task is not ready for acceptance');
   const id = randomUUID();
-  const operation: LauncherGitOperation = { id, taskId, projectId: task.project_id, deliveryId, baseBranch: git.baseBranch,
+  const operation: LauncherGitOperation = { id, taskId, projectId: task.project_id, deliveryId,
+    sourceAttemptId: delivery.attempt_id, baseBranch: git.baseBranch,
     baseCommit: git.baseCommit, taskBranch: git.taskBranch, repositoryPath: git.repositoryPath, worktreePath: git.worktreePath,
     approvedCommit: delivery.commit, mergedCommit: null, phase: 'merge' };
   const source = store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? AND id=(SELECT attempt_id FROM deliveries WHERE id=?)', taskId, deliveryId);

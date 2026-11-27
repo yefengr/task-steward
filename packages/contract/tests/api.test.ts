@@ -53,6 +53,12 @@ const gitOperation = { id, taskId: id, projectId, deliveryId: id, baseBranch: gi
   baseCommit: gitState.baseCommit, taskBranch: gitState.taskBranch, repositoryPath: gitState.repositoryPath,
   worktreePath: gitState.worktreePath, approvedCommit: 'b'.repeat(40), mergedCommit: null, phase: 'merge' };
 
+it('Git操作绑定源执行，旧操作缺失定位保持可读但不伪造源身份', () => {
+  expect(c.launcherGitOperationSchema.parse({ ...gitOperation, sourceAttemptId: id }).sourceAttemptId).toBe(id);
+  expect(c.launcherGitOperationSchema.parse(gitOperation)).not.toHaveProperty('sourceAttemptId');
+  expect(c.launcherGitOperationSchema.safeParse({ ...gitOperation, sourceAttemptId: 'unknown' }).success).toBe(false);
+});
+
 type SchemaName = Extract<keyof typeof c, `${string}Schema`>;
 const samples = {
   agentSchema: ['pi', 'other'], taskStatusSchema: ['review', 'needs_verification'], errorCodeSchema: ['conflict', 'unknown'],

@@ -165,7 +165,7 @@ it('Git验收只授权merge，merged后finalize确认退出才cleanup；退出�
   expect((await (await beat(x)).json()).gitOperations).toEqual([]);
   expect((await x.agent(attempt.id, '/settle', request())).status).toBe(200);
   const merge = (await (await beat(x)).json()).gitOperations[0];
-  expect(merge.phase).toBe('merge');
+  expect(merge).toMatchObject({ phase: 'merge', sourceAttemptId: attempt.id });
   expect((await x.detail(task.id)).task.lifecycle?.acceptedAt).toBeNull();
   expect((await x.launcher(`/git-operations/${merge.id}/report`, request({ outcome: 'blocked', message: 'merge blocked' }))).status).toBe(200);
   expect((await x.detail(task.id)).task.lifecycle?.phase).toBe('merge_blocked');
@@ -182,7 +182,8 @@ it('Git验收只授权merge，merged后finalize确认退出才cleanup；退出�
   const retry = await (await beat(x)).json(); expect(retry.gitOperations).toEqual([]);
   expect(retry.sessionOperations[0].mode).toBe('finalize');
   await x.launcher(`/session-operations/${retry.sessionOperations[0].id}/report`, request({ step: 'stop', result: 'stopped' }));
-  const cleanup = (await (await beat(x)).json()).gitOperations[0]; expect(cleanup.phase).toBe('cleanup');
+  const cleanup = (await (await beat(x)).json()).gitOperations[0];
+  expect(cleanup).toMatchObject({ phase: 'cleanup', sourceAttemptId: attempt.id });
   expect((await x.launcher(`/git-operations/${cleanup.id}/report`, request({ outcome: 'complete', mergedCommit: commit }))).status).toBe(200);
   expect((await x.detail(task.id)).task.lifecycle?.phase).toBe('complete');
 });

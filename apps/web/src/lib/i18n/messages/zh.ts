@@ -29,6 +29,8 @@ export const zh: Messages = {
   },
   statuses: { unscheduled: '未安排', queued: '待领取', running: '进行中', review: '待验收', done: '已完成', interrupted: '已中断', cancelled: '已取消' },
   taskTypes: { discussion: '讨论', implementation: '实现' },
+  priorities: { high: '高', normal: '普通', low: '低' },
+  difficulties: { unassessed: '未评估', simple: '简单', medium: '中等', complex: '复杂' },
   git: {
     section: 'Git 集成', settings: 'Git 设置', defaultBranch: '默认基准分支',
     baseBranch: '基准分支', baseCommit: '基准提交', taskBranch: '任务分支',
@@ -60,6 +62,9 @@ export const zh: Messages = {
     machine_project_unregistered: '执行电脑未登记此项目', machine_offline: '执行电脑离线', slots_full: '执行名额已满',
   },
   form: { title: '任务标题', type: '类型', goal: '目标', acceptance: '验收要求', notes: '说明', agent: 'Agent', machine: '执行电脑',
+    priority: '优先级', difficulty: '难易程度',
+    priorityHint: '影响后续领取顺序，返修仍优先；不会自动安排或打断任务。',
+    difficultyHint: '简单：边界清楚、局部且低风险；中等：需要分析或多处配合，路径基本明确；复杂：不确定性或风险较高。不是预计耗时，也不会自动选择智能体。',
     auto: '跟随上次使用', claude: 'Claude Code（暂不支持）', feedback: '返修反馈', required: '请填写此项。', invalid: '请检查内容长度。' },
   machine: {
     none: '还没有登记电脑。', online: '在线', offline: '离线', revoked: '已撤销', lastSeen: '最近心跳', slots: '名额占用',
@@ -67,7 +72,7 @@ export const zh: Messages = {
   },
   task: {
     needsResponse: '请回原 Pi 会话回复', responseFlag: '待回应', earlierProgress: '更早进展', needsVerification: '待核对', reworkPending: '返修排队', createdByAgent: '由 Agent 创建',
-    discussionEndRequested: '已请求结束', questionHistory: '讨论记录',
+    discussionEndRequested: '已请求结束', questionHistory: '讨论记录', createdAt: '创建时间',
     management: '任务管理', attention: '需要处理', verificationHint: '执行租约已过期，等待启动器核对。',
     interruptedHint: '上次执行结束时没有交付，可重新安排。', goalSection: '目标与约定', decisions: '已记录决定',
     confirmed: '用户已确认', suggested: '待确认', progress: '当前进展', noProgress: '尚无进展回报。',

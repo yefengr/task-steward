@@ -42,7 +42,8 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
     JOIN projects p ON p.id=t.project_id JOIN machine_projects mp ON mp.project_id=t.project_id AND mp.machine_id=?
     WHERE t.status='queued' AND t.agent='pi' AND ${executionMachineSql}=mp.machine_id
       AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=t.id AND a.ended_at IS NULL)
-    ORDER BY t.rework_pending DESC, t.position, t.created_at, t.id`, machineId);
+    ORDER BY t.rework_pending DESC, CASE t.priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
+      t.position, t.created_at, t.id`, machineId);
   let selected: { task: typeof candidates[number]; previous?: AttemptRow; locator?: ReturnType<typeof attemptLocator> } | undefined;
   for (const candidate of candidates) {
     if (!candidate.rework_pending) { selected = { task: candidate }; break; }

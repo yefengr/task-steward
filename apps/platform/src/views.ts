@@ -1,5 +1,5 @@
 import { REPLY_REMINDER_DELAY_MS, MACHINE_ONLINE_WINDOW_MS, taskStatusSchema } from '@pi-steward/contract';
-import type { Agent, Attempt, AttemptWorkspace, Delivery, Task, TaskStatus, TaskType, WaitingReason, WebMachine, WebProject, WebTaskDetailResponse } from '@pi-steward/contract';
+import type { Agent, Attempt, AttemptWorkspace, Delivery, Task, TaskStatus, TaskType, TaskPriority, TaskDifficulty, WaitingReason, WebMachine, WebProject, WebTaskDetailResponse } from '@pi-steward/contract';
 import { reject } from './errors.js';
 import { gitState, projectGitSettings } from './git-lifecycle.js';
 import { sessionOperationView } from './session-control.js';
@@ -7,7 +7,7 @@ import type { Store } from './store.js';
 
 export interface TaskRow {
   id: string; project_id: string; title: string; goal: string; acceptance: string; notes: string; agent: Agent;
-  machine_id: string | null; type: TaskType; status: TaskStatus; rework_pending: number; position: number;
+  machine_id: string | null; type: TaskType; priority: TaskPriority; difficulty: TaskDifficulty; status: TaskStatus; rework_pending: number; position: number;
   created_by: 'user' | 'agent'; version: number; created_at: number; updated_at: number;
   base_branch: string | null; git_sync_before_start: number | null;
 }
@@ -99,6 +99,7 @@ export function taskView(store: Store, task: TaskRow, now: number): Task {
     id: task.id, projectId: task.project_id, title: task.title, goal: task.goal, acceptance: task.acceptance,
     baseBranch: task.base_branch, git: gitState(store, task.id),
     notes: task.notes, agent: task.agent, machineId: task.machine_id, type: task.type, status: task.status,
+    priority: task.priority, difficulty: task.difficulty,
     reworkPending: Boolean(task.rework_pending), position: task.position, createdBy: task.created_by,
     version: task.version, createdAt: task.created_at, updatedAt: task.updated_at,
     waiting: waiting(store, task, active, now), needsVerification: active !== undefined && active.lease_expires_at < now,

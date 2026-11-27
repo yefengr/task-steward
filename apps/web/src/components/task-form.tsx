@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMediaQuery } from '@mantine/hooks';
 import { isValidDialogFocus, restoreDialogFocus } from '../lib/dialog-focus';
 import type { FormEvent } from 'react';
-import { gitBranchSchema, titleSchema, textSchema, webCreateTaskRequestSchema, webUpdateTaskRequestSchema } from '@pi-steward/contract';
+import { gitBranchSchema, titleSchema, textSchema, taskPrioritySchema, taskDifficultySchema, webCreateTaskRequestSchema, webUpdateTaskRequestSchema } from '@pi-steward/contract';
 import type { Task, WebMachine, WebProject } from '@pi-steward/contract';
 import type { z } from 'zod';
 import type { taskContentSchema } from '@pi-steward/contract';
@@ -14,14 +14,15 @@ import { useFloatingSafeMiddlewares } from '@yefengr/pwa-foundation';
 import { ErrorNotice } from './common';
 
 type Draft = z.infer<typeof taskContentSchema>;
-const emptyDraft: Draft = { title: '', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null, type: 'implementation', baseBranch: null };
+const emptyDraft: Draft = { title: '', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null, type: 'implementation',
+  priority: 'normal', difficulty: 'unassessed', baseBranch: null };
 const textFields = ['goal', 'acceptance', 'notes'] as const;
-const editableFields = ['title', ...textFields, 'agent', 'machineId'] as const;
+const editableFields = ['title', ...textFields, 'priority', 'difficulty', 'agent', 'machineId'] as const;
 type EditableField = (typeof editableFields)[number] | 'baseBranch';
 
 function draftFrom(task: Task): Draft {
   return { title: task.title, goal: task.goal, acceptance: task.acceptance, notes: task.notes, agent: task.agent,
-    machineId: task.machineId, type: task.type, baseBranch: task.baseBranch ?? null };
+    machineId: task.machineId, type: task.type, priority: task.priority, difficulty: task.difficulty, baseBranch: task.baseBranch ?? null };
 }
 
 interface FormProps {
@@ -165,6 +166,14 @@ export function TaskForm(props: FormProps) {
           const type = event.currentTarget.value as Draft['type'];
           setDraft((value) => ({ ...value, type }));
         }} data={[{ value: 'implementation', label: t.taskTypes.implementation }, { value: 'discussion', label: t.taskTypes.discussion }]} />}
+        <NativeSelect label={t.form.priority} description={t.form.priorityHint} value={draft.priority} onChange={(event) => {
+          const priority = taskPrioritySchema.parse(event.currentTarget.value);
+          setDraft((value) => ({ ...value, priority }));
+        }} data={taskPrioritySchema.options.map((value) => ({ value, label: t.priorities[value] }))} />
+        <NativeSelect label={t.form.difficulty} description={t.form.difficultyHint} value={draft.difficulty} onChange={(event) => {
+          const difficulty = taskDifficultySchema.parse(event.currentTarget.value);
+          setDraft((value) => ({ ...value, difficulty }));
+        }} data={taskDifficultySchema.options.map((value) => ({ value, label: t.difficulties[value] }))} />
         {showBaseBranch && (baseBranchEditable
           ? <TextInput label={t.git.taskBaseBranch} value={draft.baseBranch ?? ''}
             placeholder={firstSelection ? t.git.branchPlaceholder : defaultBranch ? t.git.inheritDefault.replace('{branch}', defaultBranch) : t.git.noDefault}
@@ -189,8 +198,10 @@ export function TaskForm(props: FormProps) {
           {props.currentTask && <details className="conflict-preview">
             <summary>{t.errors.compareCurrent}</summary>
             <p><strong>{t.statuses[props.currentTask.status]}</strong></p>
-            <dl className="kv">{(['title', ...textFields, 'agent', 'machine'] as const).map((field) => <FieldValue key={field}
-              label={t.form[field]} value={field === 'agent' ? (props.currentTask!.agent === 'pi' ? 'Pi' : t.form.claude)
+            <dl className="kv">{(['title', ...textFields, 'priority', 'difficulty', 'agent', 'machine'] as const).map((field) => <FieldValue key={field}
+              label={t.form[field]} value={field === 'priority' ? t.priorities[props.currentTask!.priority]
+                : field === 'difficulty' ? t.difficulties[props.currentTask!.difficulty]
+                : field === 'agent' ? (props.currentTask!.agent === 'pi' ? 'Pi' : t.form.claude)
                 : field === 'machine' ? props.machines.find((machine) => machine.id === props.currentTask!.machineId)?.name ?? t.form.auto
                   : props.currentTask![field] || t.common.unknown} />)}</dl>
           </details>}

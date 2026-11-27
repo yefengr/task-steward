@@ -9,8 +9,10 @@ export { toggleLanguage };
 const dictionaries = { en, 'zh-CN': zh };
 const dateOptions = { dateStyle: 'medium', timeStyle: 'short' } as const;
 const formatters = { en: new Intl.DateTimeFormat('en', dateOptions), 'zh-CN': new Intl.DateTimeFormat('zh-CN', dateOptions) };
+const shortDates = { en: new Intl.DateTimeFormat('en', { dateStyle: 'short' }),
+  'zh-CN': new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short' }) };
 
 export function useI18n() {
   const locale = useSyncExternalStore(subscribeLanguage, getLocale);
-  return { t: dictionaries[locale], locale, dateTime: formatters[locale].format };
+  return { t: dictionaries[locale], locale, dateTime: formatters[locale].format, shortDate: shortDates[locale].format };
 }

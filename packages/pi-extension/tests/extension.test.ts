@@ -261,15 +261,24 @@ it('普通 Pi 使用配对令牌查、建、改任务，写入附带当前会话
   const task = { id: randomUUID(), projectId: 'steward', title: '待办', goal: '', acceptance: '', notes: '', agent: 'pi',
     machineId: null, status: 'unscheduled', reworkPending: false, position: 1, createdBy: 'agent', version: 1,
     createdAt: 1, updatedAt: 1, waiting: null, needsVerification: false, needsResponse: false,
-    type: 'discussion', discussionEndRequested: false };
+    type: 'discussion', discussionEndRequested: false, priority: 'high', difficulty: 'complex' };
   const detail = { task, decisions: [], progress: [], questions: [], deliveries: [], attempts: [], events: [] };
-  const updated = { ...task, version: 2, acceptance: '可验证' };
+  const updated = { ...task, version: 2, acceptance: '可验证', priority: 'low', difficulty: 'simple' };
   const responses = [{ projects: [] }, { tasks: [task] }, detail, { task }, { task: updated }];
   const fetcher = vi.fn<typeof fetch>();
   for (const data of responses) fetcher.mockResolvedValueOnce(Response.json(data));
   const agent = mockTools(fetcher, { config: configFile() });
-  const create = { projectId: task.projectId, title: task.title, type: task.type };
-  const update = { taskId: task.id, version: 1, acceptance: updated.acceptance };
+  const create = { projectId: task.projectId, title: task.title, type: task.type, priority: task.priority, difficulty: task.difficulty };
+  const update = { taskId: task.id, version: 1, acceptance: updated.acceptance, priority: updated.priority, difficulty: updated.difficulty };
+  for (const name of ['steward_create_task', 'steward_update_task']) {
+    const schema = agent.registerTool.mock.calls.map(([tool]) => tool).find((tool) => tool.name === name)!.parameters;
+    expect(schema).toMatchObject({ properties: {
+      priority: { anyOf: ['high', 'normal', 'low'].map((value) => ({ const: value })) },
+      difficulty: { anyOf: ['unassessed', 'simple', 'medium', 'complex'].map((value) => ({ const: value })) },
+    } });
+    expect(schema).not.toHaveProperty('required', expect.arrayContaining(['priority']));
+    expect(schema).not.toHaveProperty('required', expect.arrayContaining(['difficulty']));
+  }
   const calls = [['steward_list_projects', {}], ['steward_list_tasks', { projectId: task.projectId }],
     ['steward_get_task', { taskId: task.id }], ['steward_create_task', create], ['steward_update_task', update]] as const;
   for (const [index, [name, args]] of calls.entries()) expect((await agent.call(name, args)).details).toEqual(responses[index]);
@@ -286,7 +295,8 @@ it('普通 Pi 使用配对令牌查、建、改任务，写入附带当前会话
   const bodies = fetcher.mock.calls.slice(3).map(([, init]) => JSON.parse(String(init?.body)));
   expect(bodies).toEqual([
     { ...create, sessionId: agent.sessionId, requestId: expect.any(String) },
-    { version: 1, acceptance: updated.acceptance, sessionId: agent.sessionId, requestId: expect.any(String) },
+    { version: 1, acceptance: updated.acceptance, priority: updated.priority, difficulty: updated.difficulty,
+      sessionId: agent.sessionId, requestId: expect.any(String) },
   ]);
   expect(bodies.every(({ requestId }) => uuidSchema.safeParse(requestId).success)).toBe(true);
   expect((await agent.call('steward_get_task', { taskId: '../projects' })).details).toEqual({ code: 'invalid_request' });

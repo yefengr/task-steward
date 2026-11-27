@@ -48,14 +48,32 @@ export const projectName = 'Task Steward 任务控制台';
 const machineName = '测试 Mac';
 
 function platformApi(origin: string, token: string, directory: string) {
-  async function post(path: string, data: object, attemptId?: string) {
+  async function post(path: string, data: object, attemptId?: string, ownerId?: string) {
     const response = await fetch(`${origin}/api/v1${path}`, { method: 'POST', headers: {
-      Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(attemptId ? { 'X-Steward-Attempt-Id': attemptId } : {}),
+      Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(attemptId ? { 'X-Steward-Attempt-Id': attemptId } : {}), ...(ownerId ? { 'X-Steward-Owner-Id': ownerId } : {}),
     }, body: JSON.stringify(data) });
     expect(response.status, path).toBe(200);
     return response.json() as Promise<unknown>;
   }
   return {
+    foreground: async (delivered = false) => {
+      const ownerId = randomUUID(), sessionId = randomUUID();
+      const { binding } = c.foregroundStartResponseSchema.parse(await post('/task-management/foreground/start', {
+        requestId: randomUUID(), goalId: randomUUID(), ownerId, pid: 123456, projectId, projectName, registeredPath: directory,
+        title: '前台纳管与后台接续', goal: '隔离浏览器验收', acceptance: '', notes: '', type: 'discussion',
+        locator: { path: directory, sessionId, sessionFile: join(directory, `${sessionId}.jsonl`) },
+      }));
+      if (delivered) {
+        await post('/agent/end-discussion', { requestId: randomUUID() }, binding.attemptId, ownerId);
+        await post('/agent/deliveries', { requestId: randomUUID(), summary: '前台已交付', done: [], notCovered: [], verification: [], howTo: [], issues: [] }, binding.attemptId, ownerId);
+        await post('/agent/foreground/settle', { requestId: randomUUID() }, binding.attemptId, ownerId);
+      } else await post('/agent/foreground/interrupt', { requestId: randomUUID() }, binding.attemptId, ownerId);
+      return { ...binding, sessionId };
+    },
+    foregroundControl: async () => c.launcherHeartbeatResponseSchema.parse(await post('/launcher/heartbeat', {
+      requestId: randomUUID(), launcherVersion: 'smoke', slots: 2, sessionControl: true, foregroundControl: true,
+      projects: [{ id: projectId, name: projectName, path: directory }], attempts: [],
+    })),
     register: async (sessionControl?: true) => c.launcherHeartbeatResponseSchema.parse(await post('/launcher/heartbeat',
       c.launcherHeartbeatRequestSchema.parse({ requestId: randomUUID(), launcherVersion: 'smoke', slots: 2, sessionControl,
         projects: [{ id: projectId, name: projectName, path: directory }], attempts: [] }))),

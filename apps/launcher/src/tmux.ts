@@ -117,12 +117,13 @@ export function tmuxClient(config: LocalConfig, options: {
           '-n', displayName(claim.displayName), '--', message]);
       } catch { throw new TmuxError(); }
     },
-    async launchResume(target: string, attemptId: string, locator: PiSessionLocator): Promise<number> {
+    async launchResume(target: string, attemptId: string, locator: PiSessionLocator, continuation = false): Promise<number> {
       if (target !== targetFor(attemptId)) throw new TmuxError(true);
       try {
         const { stdout } = await exec(['new-session', '-d', '-s', target, '-P', '-F', '#{pane_pid}',
           '-c', `${locator.path.replaceAll('#', '##')}/.`, '-e', `STEWARD_ATTEMPT_ID=${attemptId}`,
           '-e', escapedTmuxArg(`STEWARD_CONFIG=${options.configPath}`), '-e', 'STEWARD_RESUME=1',
+          ...(continuation ? ['-e', 'STEWARD_CONTINUATION=1'] : []),
           '-e', escapedTmuxArg(`PATH=${path}`), '--',
           ...[config.pi.command, ...config.pi.extraArgs, '-e', options.extensionPath, '--session', locator.sessionFile].map(escapedTmuxArg)]);
         const pid = parsePid(stdout.trim());

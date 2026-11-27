@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { processStatus } from '@pi-steward/execution-runtime';
 import type { LauncherGitOperation, LauncherGitReport, LocalConfig } from '@pi-steward/contract';
 import { PlatformError, type Platform } from './platform.js';
 import type { GitOperation, State } from './state.js';
@@ -77,6 +78,10 @@ export class GitLifecycle {
     let release: (() => void) | undefined;
     try {
       if (!project) throw new GitFailure('git_project_unregistered');
+      // 普通 Pi 结算后仍可能停留在原生会话；OS cwd 不能证明其逻辑工作树已无人使用。
+      if (operation.foregroundOwner && processStatus(operation.foregroundOwner.pid) !== 'dead') {
+        throw new GitFailure('git_foreground_session_active');
+      }
       await validateOperation(operation, project.path);
       release = await lockRepository(project.path);
       if (operation.phase === 'cleanup') {

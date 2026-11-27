@@ -6,7 +6,7 @@ Task Steward 是面向个人的任务清单与执行协调系统。你在工作�
 
 首版平台、网页、Mac 启动器和 Pi 接入已完成，Mac 真机验收已获用户确认。后续迭代的交付、用户验收、合并、发包和部署分别记录，准确状态只看 [ROADMAP](docs/ROADMAP.md)，不能从本地测试通过推定线上版本。
 
-当前代码支持实现／讨论任务、明确提问后的回复提醒、普通 Pi 任务代管、实际工作现场登记与会话重启／恢复，以及项目默认／任务覆盖的基准分支与验收后本地合并、工作树清理。代码任务从独立任务工作树开发，用户验收确切版本后由启动器合并，成功后清理；不会因此自动推送、发布或部署。讨论由用户主动请求结束；提醒仅在明确等待回复满三分钟后显示。依赖调度、验收积压门禁、Web Push 和 Claude Code 仍是候选，不是当前能力。使用边界见 [CONTEXT](docs/CONTEXT.md)。
+当前代码支持实现／讨论任务、明确提问后的回复提醒、普通 Pi 扩展一次登记、明确目标的前台纳管及原会话后台接续、实际工作现场登记与会话重启／恢复，以及项目默认／任务覆盖的基准分支与验收后本地合并、工作树清理。代码任务从独立任务工作树开发，用户验收确切版本后由启动器合并，成功后清理；不会因此自动推送、发布或部署。讨论由用户主动请求结束；提醒仅在明确等待回复满三分钟后显示。依赖调度、验收积压门禁、Web Push 和 Claude Code 仍是候选，不是当前能力。使用边界见 [CONTEXT](docs/CONTEXT.md)。
 
 ## 文档入口
 
@@ -34,7 +34,7 @@ pnpm install --frozen-lockfile
 pnpm verify
 ```
 
-`verify` 依次执行全量构建、类型检查、lint 和各包测试。分开检查可运行 `pnpm build`、`pnpm typecheck`、`pnpm lint`、`pnpm test`；其中 `typecheck` 与 `test` 均先构建 contract 和 platform-http。直接跑子包测试前也须先构建依赖，不能把缺少 `dist` 当作代码回归。
+`verify` 依次执行全量构建、类型检查、lint 和各包测试。分开检查可运行 `pnpm build`、`pnpm typecheck`、`pnpm lint`、`pnpm test`；其中 `typecheck` 与 `test` 均先构建 contract、execution-runtime 和 platform-http。直接跑子包测试前也须先构建依赖，不能把缺少 `dist` 当作代码回归。
 
 完成构建后按改动风险选择额外验证：
 
@@ -43,6 +43,7 @@ pnpm verify
 | `node scripts/smoke-launcher.mjs` | 隔离平台、假 Agent 与 tmux 的领取／交付／返修链路；没有 tmux 会跳过，不等于通过 |
 | `pnpm --filter @pi-steward/web test:e2e` | 隔离平台上的真实浏览器任务流程、布局与交互 |
 | `node scripts/smoke-launcher.mjs --real-pi <Pi绝对路径>` | 真实 Pi 的两种讨论结束入口；独立 tmux、本机平台、确定性测试模型，不调用远端模型 |
+| `node scripts/smoke-foreground.mjs <Pi绝对路径> [实际本地包目录]` | 隔离平台与真实 Pi 的前台纳管、活进程拒绝接管、退出后同任务／原对话后台接续及实际文件写入；提供带依赖的实际本地包目录时，还验证 `pi.extensions` 自动发现与同入口 `-e` 共存 |
 | `node scripts/smoke-session-locator.mjs <Pi绝对路径>` | 真实 Pi 工作树迁移后的重启、恢复、返修及现场缺失；覆盖边界见[回归记录](docs/plans/completed/20261124-session-locator-regression.md) |
 
 这些隔离测试不替代 LaunchAgent 安装升级、Pi Reach 连接和正式部署验收，也不要求为补文档重跑已完成的验收。发布与 Mac 接入操作只使用 [DEPLOYMENT](docs/DEPLOYMENT.md)，未经授权不推送、发布或部署。

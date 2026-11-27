@@ -47,7 +47,7 @@ function fixture() {
   const base = commit(root, 'base');
   g(root, 'checkout', '-qb', 'maintenance');
   const data: AgentContextResponse = { task: { id: randomUUID(), projectId: 'p', title: 't', goal: '', acceptance: '', notes: '', type: 'implementation' },
-    attempt: { id: randomUUID(), kind: 'new' }, workspace: { path: root, requirements: [] }, decisions: [], deliveries: [], questions: [],
+    attempt: { id: randomUUID(), kind: 'new', executionMode: 'background' }, workspace: { path: root, requirements: [] }, decisions: [], deliveries: [], questions: [],
     gitSettings: { baseBranch: 'main', syncBeforeStart: true } };
   return { dir, root, base, data };
 }

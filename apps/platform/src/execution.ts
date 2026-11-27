@@ -3,8 +3,8 @@ import { LEASE_DURATION_MS } from '@pi-steward/contract';
 import type { LauncherClaimResponse, LauncherExitedRequest, LauncherHeartbeatRequest, LauncherHeartbeatResponse, LauncherStartedRequest } from '@pi-steward/contract';
 import { reject } from './errors.js';
 import { freezeGitSettings, gitDirectives, gitState } from './git-lifecycle.js';
-import { attemptLocator, confirmedLocator, sameLocator } from './session-locator.js';
-import { checkReplacementStart, expireSessionPermissions, launchPending, replacementExited, replacementStarted, sessionDirectives } from './session-control.js';
+import { attemptLocator, confirmedLocator, sameLocator, sessionInUse } from './session-locator.js';
+import { checkReplacementStart, expireSessionPermissions, launchPending, replacementExited, replacementStarted, requestSessionOperation, sessionDirectives } from './session-control.js';
 import type { Store } from './store.js';
 import { executionMachineSql, isOnline, occupiedSlots, requireMachine, requireTask } from './views.js';
 import type { AttemptRow, TaskRow } from './views.js';
@@ -12,8 +12,8 @@ import type { AttemptRow, TaskRow } from './views.js';
 const tmuxTarget = (attemptId: string) => `steward-${attemptId}`;
 
 export function heartbeat(store: Store, machineId: string, input: LauncherHeartbeatRequest, now: number): LauncherHeartbeatResponse {
-  store.run('UPDATE machines SET last_seen_at=?, slots=?, launcher_version=?, session_control=? WHERE id=?',
-    now, input.slots, input.launcherVersion, Number(input.sessionControl === true), machineId);
+  store.run('UPDATE machines SET last_seen_at=?, slots=?, launcher_version=?, session_control=?, foreground_control=? WHERE id=?',
+    now, input.slots, input.launcherVersion, Number(input.sessionControl === true), Number(input.foregroundControl === true), machineId);
   store.run('DELETE FROM machine_projects WHERE machine_id=?', machineId);
   for (const project of input.projects) {
     store.run('INSERT INTO projects (id, name, created_at) VALUES (?,?,?) ON CONFLICT(id) DO NOTHING', project.id, project.name, now);
@@ -21,7 +21,7 @@ export function heartbeat(store: Store, machineId: string, input: LauncherHeartb
   }
   expireSessionPermissions(store, machineId, now);
   const reported = new Map(input.attempts.map((attempt) => [attempt.id, attempt]));
-  const active = store.all<AttemptRow>('SELECT * FROM attempts WHERE machine_id=? AND ended_at IS NULL ORDER BY claimed_at, rowid', machineId);
+  const active = store.all<AttemptRow>("SELECT * FROM attempts WHERE machine_id=? AND ended_at IS NULL AND execution_mode='background' ORDER BY claimed_at, rowid", machineId);
   const directives = active.flatMap((attempt): LauncherHeartbeatResponse['directives'] => {
     const tmuxSession = tmuxTarget(attempt.id);
     const observation = reported.get(attempt.id);
@@ -42,8 +42,10 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
     JOIN projects p ON p.id=t.project_id JOIN machine_projects mp ON mp.project_id=t.project_id AND mp.machine_id=?
     WHERE t.status='queued' AND t.agent='pi' AND ${executionMachineSql}=mp.machine_id
       AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=t.id AND a.ended_at IS NULL)
+      AND NOT EXISTS (SELECT 1 FROM session_operations o WHERE o.task_id=t.id AND o.step IN ('stop','launch','cleanup'))
     ORDER BY t.rework_pending DESC, CASE t.priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
       t.position, t.created_at, t.id`, machineId);
+  let blockedForeground = false;
   let selected: { task: typeof candidates[number]; previous?: AttemptRow; locator?: ReturnType<typeof attemptLocator> } | undefined;
   for (const candidate of candidates) {
     if (!candidate.rework_pending) { selected = { task: candidate }; break; }
@@ -52,11 +54,22 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
     const previous = latestDelivery && (latestDelivery.review === 'rework' || gitState(store, candidate.id)?.phase === 'needs_rework') ? store.get<AttemptRow>(
       'SELECT * FROM attempts WHERE task_id=? AND id=? AND machine_id=?', candidate.id, latestDelivery.attempt_id, machineId) : undefined;
     const locator = previous ? attemptLocator(previous) : undefined;
+    if (locator && sessionInUse(store, machineId, locator, candidate.id)) { blockedForeground = true; continue; }
+    if (previous?.execution_mode === 'foreground' && locator) {
+      // 交付结算不等于普通 Pi 已退出；前台返修也必须走同一原进程核对链。
+      const failed = store.get(`SELECT 1 FROM session_operations WHERE source_attempt_id=? AND mode='background'
+        AND step='failed' AND deadline_at>=?`, previous.id, candidate.updated_at);
+      const latest = store.get<{ id: string }>('SELECT id FROM attempts WHERE task_id=? ORDER BY claimed_at DESC,rowid DESC LIMIT 1', candidate.id);
+      if (failed || !machine.foreground_control || !machine.session_control || latest?.id !== previous.id ||
+          (candidate.type === 'implementation' && !previous.confirmed_git_kind)) { blockedForeground = true; continue; }
+      requestSessionOperation(store, candidate.id, { requestId: randomUUID(), attemptId: previous.id, mode: 'background' }, now);
+      return { attempt: null };
+    }
     // 缺定位的返修保持停止，但不能挡住同机其它可执行任务。
     if (locator) { selected = { task: candidate, previous, locator }; break; }
   }
   if (!selected) {
-    if (candidates.length) reject('session_record_missing', 'Rework requires the latest delivered session on its original machine');
+    if (candidates.length && !blockedForeground) reject('session_record_missing', 'Rework requires the latest delivered session on its original machine');
     return { attempt: null };
   }
   const { task, previous, locator } = selected;
@@ -83,6 +96,7 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
 }
 
 export function started(store: Store, attempt: AttemptRow, input: LauncherStartedRequest, now: number) {
+  if (attempt.execution_mode !== 'background') reject('forbidden', 'Launcher cannot start a foreground owner');
   if (input.tmuxSession !== tmuxTarget(attempt.id)) reject('invalid_request', 'Invalid tmux target for this attempt');
   if (attempt.ended_at !== null) reject('attempt_ended', 'Attempt has ended');
   checkReplacementStart(store, attempt.id, now);
@@ -99,6 +113,7 @@ export function started(store: Store, attempt: AttemptRow, input: LauncherStarte
 }
 
 export function exited(store: Store, attempt: AttemptRow, input: LauncherExitedRequest, now: number) {
+  if (attempt.execution_mode !== 'background') reject('forbidden', 'Launcher cannot close a foreground owner');
   if (attempt.ended_at !== null) reject('attempt_ended', 'Attempt has ended');
   const task = requireTask(store, attempt.task_id);
   const delivered = !!store.get('SELECT 1 FROM deliveries WHERE attempt_id=?', attempt.id);

@@ -10,10 +10,12 @@ export interface TaskRow {
   machine_id: string | null; type: TaskType; priority: TaskPriority; difficulty: TaskDifficulty; status: TaskStatus; rework_pending: number; position: number;
   created_by: 'user' | 'agent'; version: number; created_at: number; updated_at: number;
   base_branch: string | null; git_sync_before_start: number | null;
+  origin: Task['origin'];
 }
 export interface AttemptRow {
   id: string; task_id: string; machine_id: string; agent: Agent; kind: Exclude<Attempt['kind'], 'resume'>; session_id: string;
   resumed_from_attempt_id: string | null; session_locator: string | null;
+  execution_mode: Attempt['executionMode']; goal_id: string | null; owner_id: string | null; owner_pid: number | null;
   tmux_session: string | null; claimed_at: number; started_at: number | null; lease_expires_at: number;
   cancel_requested: number; discussion_end_requested_at: number | null; ended_at: number | null;
   exit_code: number | null; result: Attempt['result']; workspace_path: string;
@@ -23,7 +25,7 @@ export interface AttemptRow {
 }
 interface MachineRow {
   id: string; name: string; revoked_at: number | null; slots: number; last_seen_at: number | null;
-  launcher_version: string | null; session_control: number;
+  launcher_version: string | null; session_control: number; foreground_control: number;
 }
 interface ProjectRow { id: string; name: string; last_machine_id: string | null; created_at: number }
 interface DeliveryRow {
@@ -63,9 +65,9 @@ export function executionMachine(store: Store, taskId: string) {
 }
 export function occupiedSlots(store: Store, machineId: string, now: number) {
   return store.get<{ count: number }>(`SELECT
-    (SELECT COUNT(*) FROM attempts WHERE machine_id=? AND ended_at IS NULL) +
+    (SELECT COUNT(*) FROM attempts WHERE machine_id=? AND ended_at IS NULL AND execution_mode='background') +
     (SELECT COUNT(*) FROM session_operations o JOIN attempts a ON a.id=o.source_attempt_id
-      WHERE o.machine_id=? AND o.step='stop' AND o.deadline_at>? AND a.ended_at IS NOT NULL) AS count`, machineId, machineId, now)!.count;
+      WHERE o.machine_id=? AND o.step='stop' AND o.deadline_at>? AND (a.ended_at IS NOT NULL OR a.execution_mode='foreground')) AS count`, machineId, machineId, now)!.count;
 }
 export function activeAttempt(store: Store, taskId: string) {
   return store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? AND ended_at IS NULL', taskId);
@@ -97,6 +99,7 @@ export function taskView(store: Store, task: TaskRow, now: number): Task {
   const wait = running && !discussionEndRequested ? replyWait(store, running) : undefined;
   return {
     id: task.id, projectId: task.project_id, title: task.title, goal: task.goal, acceptance: task.acceptance,
+    origin: task.origin, executionMode: store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? ORDER BY claimed_at DESC,rowid DESC LIMIT 1', task.id)?.execution_mode ?? null,
     baseBranch: task.base_branch, git: gitState(store, task.id),
     notes: task.notes, agent: task.agent, machineId: task.machine_id, type: task.type, status: task.status,
     priority: task.priority, difficulty: task.difficulty,
@@ -129,8 +132,8 @@ export function questionViews(store: Store, taskId: string) {
 function attemptViews(store: Store, taskId: string, now: number, includeSessionControl: boolean): Attempt[] {
   return store.all<AttemptRow & { name: string }>(`SELECT a.*, m.name FROM attempts a JOIN machines m ON m.id=a.machine_id
     WHERE a.task_id=? ORDER BY a.claimed_at, a.rowid`, taskId).map((a) => ({
-    id: a.id, taskId: a.task_id, machineId: a.machine_id, machineName: a.name, agent: a.agent,
-    kind: includeSessionControl && a.resumed_from_attempt_id ? 'resume' : a.kind,
+    id: a.id, taskId: a.task_id, machineId: a.machine_id, machineName: a.name, agent: a.agent, executionMode: a.execution_mode,
+    kind: includeSessionControl && a.resumed_from_attempt_id && a.kind !== 'rework' ? 'resume' : a.kind,
     sessionId: (a.session_locator ? (JSON.parse(a.session_locator) as { sessionId: string }).sessionId :
       a.confirmed_session_id) ?? a.session_id,
     tmuxSession: a.tmux_session, claimedAt: a.claimed_at, startedAt: a.started_at,

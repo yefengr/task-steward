@@ -1,3 +1,5 @@
+import { registerForeground } from './foreground.js';
+import { claimInstance } from './instance-guard.js';
 import { createHash } from 'node:crypto';
 import * as c from '@pi-steward/contract';
 import type { AgentToolResult, ExtensionAPI } from '@earendil-works/pi-coding-agent';
@@ -28,7 +30,12 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
     return result(JSON.stringify(data), data);
   } catch (error) {
     const code = error instanceof AgentError ? error.code : 'request_failed';
-    const guidance = code === 'cancelled' ? '请求已取消。' :
+    const guidance = code === 'session_in_use' ? '原 Pi 对话仍被另一项执行或交接占用，不得继续实施或换目标编号绕过。先处理原任务；独立目标请使用原生新会话或 fork。' :
+      ['binding_required', 'session_source_alive', 'session_ownership_unavailable', 'foreground_fork_requires_handover'].includes(code) ? '当前未取得执行权。不得凭历史继续实施，也不能按新未纳管目标绕过竞争；核对旧进程、当前会话和平台状态后重试。' :
+      code === 'goal_interrupt_required' ? '上一目标尚未结束。请先明确结束或调用 steward_interrupt_task 中断，不得静默替换目标。' :
+      code === 'discussion_end_required' ? '讨论尚未收到 Steward 确认的结束请求，不能交付。请继续交流或等待用户明确结束讨论。' :
+      code === 'goal_ended' ? '历史目标已结束，不自动恢复执行；独立目标请用 transition=new。' :
+      code === 'cancelled' ? '请求已取消。' :
       code === 'helper_unavailable' ? '请重新安装 Steward。' :
       code === 'proxy_unsupported' ? '显式代理需要使用 Node 24.20.0 或更高版本运行 Pi。' :
       code === 'invalid_request' ? '请检查工具参数后重试。' :
@@ -48,6 +55,7 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
       code === 'task_context_required' ? '请先调用 steward_task 确认任务类型；只为实现任务记录工作现场。' :
       code === 'workspace_unavailable' ? '无法核对当前目录、Git 或持久化 Pi 会话；请核对本机现场，必要时向用户确认。' :
       code === 'attempt_ended' ? '本次尝试已结束，请检查平台状态。' :
+      code === 'session_handover_pending' ? '交接核对中，保持原绑定和轮询，稍后使用原参数重试。这不代表执行权限失效，不要另建任务或绕过交接写回。' :
       code === 'conflict' ? '请核对平台状态。交付请求重试时请保留原参数。' :
       code === 'pending_writes_full' ? '待确认的请求已达上限，请先使用原参数重试已有请求。' :
       code === 'invalid_config' ? '请检查本机配置及 0600 文件权限后重试。' : '请稍后使用相同参数重试。';
@@ -117,13 +125,75 @@ function deliveryId(attemptId: string) {
 export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env: process.env }) {
   registerTaskManagement(pi, options);
   const attempt = c.uuidSchema.safeParse(options.env.STEWARD_ATTEMPT_ID);
-  registerTaskSession(pi, attempt.success);
-  if (!attempt.success) return;
-  const request = agentClient(attempt.data, options);
-  const sessionReport = registerSessionReport(pi, request, options.env.STEWARD_RESUME === '1');
-  const control = registerAttemptControl(pi, attempt.data, request);
-  const write = retryableWrites();
-  const requestId = deliveryId(attempt.data);
+  let activeId = attempt.success ? attempt.data : undefined;
+  let epoch = 0;
+  const request: ReturnType<typeof agentClient> = async (...args) => {
+    if (!activeId) throw new AgentError('binding_required');
+    const id = activeId;
+    const generation = epoch;
+    try {
+      const data = await agentClient(id, options, foreground?.binding ? foreground.ownerId : undefined)(...args);
+      if (generation !== epoch || id !== activeId) throw new AgentError('binding_changed');
+      return data;
+    } catch (error) {
+      // 交接核对中的可重试错误不在失权列表内，保留原绑定及 control 轮询。
+      if (generation === epoch && id === activeId && foreground.binding && error instanceof AgentError &&
+          ['forbidden', 'attempt_ended', 'conflict', 'session_in_use'].includes(error.code)) foreground.suspend(true, error.code === 'session_in_use');
+      throw error;
+    }
+  };
+  function scopedRequest(): ReturnType<typeof agentClient> {
+    const generation = epoch;
+    return (...args) => generation === epoch ? request(...args) : Promise.reject(new AgentError('binding_changed'));
+  }
+  const sessionReport = registerSessionReport(pi, request, options.env.STEWARD_RESUME === '1', !attempt.success);
+  const control = registerAttemptControl(pi, activeId ?? '', request, !attempt.success, options.env.STEWARD_CONTINUATION === '1');
+  let write = retryableWrites();
+  let requestId = activeId ? deliveryId(activeId) : '';
+  const foreground = registerForeground(pi, options, (binding, ctx) => {
+    epoch++;
+    activeId = binding.attemptId;
+    delivered = false;
+    taskContext = undefined;
+    write = retryableWrites();
+    requestId = deliveryId(activeId);
+    control.activate(ctx, activeId, scopedRequest());
+    sessionReport.activate(ctx, scopedRequest());
+  }, () => {
+    if (attempt.success) return;
+    epoch++;
+    activeId = undefined;
+    control.deactivate();
+    sessionReport.deactivate();
+    delivered = false;
+    taskContext = undefined;
+  });
+  registerTaskSession(pi, () => activeId ? (foreground.binding ? 'foreground' : 'background') : false);
+  pi.registerTool({
+    name: 'steward_begin_task', executionMode: 'sequential', label: '开始前台目标',
+    description: '明确目标时自动调用登记并取得前台执行权；普通随口问答不调用。continue 复用当前目标；new 必须先结束或明确中断旧目标。离线新目标尚未纳管，不享有平台权限；历史纳管目标恢复失败不得继续写入。网络未知用 continue 原参数重试。',
+    parameters: Type.Object({ title: Type.String({ minLength: 1, maxLength: 500 }), goal: text(),
+      acceptance: Type.Optional(text()), notes: Type.Optional(text()),
+      type: Type.Union([Type.Literal('discussion'), Type.Literal('implementation')]),
+      transition: Type.Union([Type.Literal('continue'), Type.Literal('new')]) }),
+    execute: (_id, args, signal, _update, ctx) => report(async () => {
+      if (attempt.success) throw new AgentError('already_bound');
+      try {
+        return await foreground.begin({ ...args, acceptance: args.acceptance ?? '', notes: args.notes ?? '' }, ctx, signal);
+      } catch (error) {
+        if (error instanceof AgentError && ['network_error', 'unauthorized', 'internal_error', 'invalid_config', 'project_not_registered'].includes(error.code)) {
+          const message = foreground.managedHistory ? '历史目标当前未取得执行权，不得继续实施或离线绕过。' :
+            '本目标尚未纳管，没有平台执行权限。可按用户本地授权工作；纳管重试请保留同一目标，不能声称平台已保存。';
+          return { code: error.code, managed: foreground.managedHistory, bound: false, message };
+        }
+        throw error;
+      }
+    }),
+  });
+  pi.registerTool({
+    name: 'steward_interrupt_task', executionMode: 'sequential', label: '中断前台目标', description: '用户明确切换或放弃当前目标时调用，不关 Pi、不回滚。当前有执行权时中断平台执行；fork或失权历史仅解除本地关联，并明确平台任务未改变。等待回复不要调用。',
+    parameters: Type.Object({}), execute: (_id, _args, signal) => report(() => foreground.close('interrupt', signal)),
+  });
   let delivered = false;
   let taskContext: c.AgentContextResponse | undefined;
 
@@ -206,19 +276,22 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
     parameters: deliveryParameters,
     execute: (_id, args, signal, _update, ctx) => report(async () => {
       const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
+      if (data.task.type === 'discussion' && !control.discussionEndConfirmed) throw new AgentError('discussion_end_required');
       if (data.git) await proveWorkspace(ctx, data, args);
       const saved = await request('POST', 'deliveries', c.agentDeliveryResponseSchema,
         validatedBody(c.agentDeliveryRequestSchema, { ...args, ...(data.git ? { baseCommit: args.baseCommit ?? data.git.baseCommit } : {}), requestId }), signal);
       delivered = true;
+      foreground.noteDelivered();
       return saved;
     }),
   });
   pi.registerTool({
-    name: 'steward_finish', label: '结束 Steward 执行', description: '交付已确认保存且本次执行已收尾时，请求 Pi 结束。',
+    name: 'steward_finish', executionMode: 'sequential', label: '结束 Steward 执行', description: '交付已保存后收尾：前台仅结束本目标并解除绑定、保留 Pi；后台请求 Pi 退出。',
     parameters: Type.Object({}),
-    async execute(_id, _args, _signal, _update, ctx): Promise<AgentToolResult<{ code: string } | { ok: boolean }>> {
-      if (!delivered && !control.deliverySaved) return result('尚未确认保存交付，不能结束。若用户要放弃任务，请用户在平台取消或在 Pi 中直接退出。',
+    async execute(_id, _args, signal, _update, ctx): Promise<AgentToolResult<{ code: string } | { ok: boolean }>> {
+      if (!delivered && !control.deliverySaved && !foreground.deliveryKnown) return result('尚未确认保存交付，不能结束。若用户要放弃任务，请用户在平台取消或在 Pi 中直接退出。',
         { code: 'delivery_required' });
+      if (!attempt.success) return report(() => foreground.close('settle', signal));
       control.finish(ctx);
       return result('已请求 Pi 在本轮结束后退出。', { ok: true });
     },
@@ -226,5 +299,5 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
 }
 
 export default function (pi: ExtensionAPI) {
-  registerSteward(pi);
+  if (claimInstance(pi, import.meta.url)) registerSteward(pi);
 }

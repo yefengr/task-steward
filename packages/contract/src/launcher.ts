@@ -6,7 +6,7 @@ import { launcherGitOperationSchema } from './git-lifecycle.js';
 
 export const launcherHeartbeatRequestSchema = requestIdSchema.extend({
   launcherVersion: z.string().trim().min(1).max(128), slots: slotsSchema,
-  sessionControl: z.literal(true).optional(), gitLifecycle: z.literal(true).optional(),
+  sessionControl: z.literal(true).optional(), gitLifecycle: z.literal(true).optional(), foregroundControl: z.literal(true).optional(),
   projects: z.array(z.strictObject({
     id: projectIdSchema, name: z.string().trim().min(1).max(500),
     path: z.string().max(4096).regex(/^\/[^\0]*$/),

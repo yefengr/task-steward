@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
+import * as runtime from '@pi-steward/execution-runtime';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -48,6 +49,20 @@ function fixture() {
   saveState(file, state);
   return { dir, root, source, marker, operation, accepted, base, file, reportGit, start };
 }
+it('前台目标已结算也不代表普通 Pi 已退出，无法确认时不合并或清理', async () => {
+  const x = fixture(); x.operation.foregroundOwner = { goalId: randomUUID(), pid: process.pid };
+  const status = vi.spyOn(runtime, 'processStatus').mockReturnValue('alive');
+  try {
+    await x.start().apply(x.operation, false);
+    expect(x.reportGit.mock.lastCall?.[1]).toMatchObject({ outcome: 'blocked', message: 'git_foreground_session_active' });
+    expect(g(x.root, 'rev-parse', 'main')).toBe(x.base); expect(existsSync(x.source)).toBe(true);
+    status.mockReturnValue('unavailable'); await x.start().apply(x.operation, false);
+    expect(g(x.root, 'rev-parse', 'main')).toBe(x.base);
+    status.mockReturnValue('dead'); await x.start().apply(x.operation, false);
+    expect(x.reportGit.mock.lastCall?.[1].outcome).toBe('merged');
+    expect(g(x.root, 'rev-parse', 'main')).toBe(x.accepted);
+  } finally { status.mockRestore(); }
+});
 it.each(['changed', 'dirty', 'locked', 'unowned', 'primary'])( 'source gate rejects %s', async (mode) => {
   const x = fixture();
   if (mode === 'changed') commit(x.source, 'late');

@@ -52,7 +52,7 @@ export function platformClient(config: c.LocalConfig, fetcher?: typeof fetch, ge
         return await post('heartbeat', body, c.launcherHeartbeatResponseSchema);
       } catch (error) {
         if (!(error instanceof PlatformError) || error.code !== 'invalid_request') throw error;
-        return post('heartbeat', { ...body, sessionControl: undefined, gitLifecycle: undefined, requestId: randomUUID() }, legacyHeartbeatResponse);
+        return post('heartbeat', { ...body, sessionControl: undefined, gitLifecycle: undefined, foregroundControl: undefined, requestId: randomUUID() }, legacyHeartbeatResponse);
       }
     },
     reportGit: (id: string, body: c.LauncherGitReport) => post(`git-operations/${id}/report`, body, c.okResponseSchema),

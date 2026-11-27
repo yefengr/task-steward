@@ -3,6 +3,7 @@ import type { AgentContextResponse, AgentControlResponse, AgentDeliveryRequest, 
 import { reject } from './errors.js';
 import { checkGitDelivery, confirmGitWorkspace, gitState, resolvedGitSettings } from './git-lifecycle.js';
 import type { Store } from './store.js';
+import { sessionInUse } from './session-locator.js';
 import { decisionViews, deliveryViews, questionViews, replyWait, requireTask } from './views.js';
 import type { AttemptRow } from './views.js';
 
@@ -32,12 +33,12 @@ export function agentContext(store: Store, attempt: AttemptRow): AgentContextRes
   const task = requireTask(store, attempt.task_id);
   const deliveries = deliveryViews(store, task.id);
   const requirements = [scopeRequirement];
-  const resumed = attempt.resumed_from_attempt_id !== null;
+  const resumed = attempt.resumed_from_attempt_id !== null && attempt.kind !== 'rework';
   const previous = task.type === 'implementation' && !resumed ? previousWorkspace(store, attempt, deliveries.at(-1)) : undefined;
   if (resumed) requirements.push(resumeWorkspaceRequirement);
   else if (task.type === 'implementation') requirements.push(implementationWorkspaceRequirement);
   return { gitSettings: resolvedGitSettings(store, task.id), git: gitState(store, task.id), task: { id: task.id, projectId: task.project_id, type: task.type, title: task.title, goal: task.goal,
-    acceptance: task.acceptance, notes: task.notes }, attempt: { id: attempt.id, kind: resumed ? 'resume' : attempt.kind },
+    acceptance: task.acceptance, notes: task.notes }, attempt: { id: attempt.id, kind: resumed ? 'resume' : attempt.kind, executionMode: attempt.execution_mode },
   workspace: { path: attempt.workspace_path, requirements, ...(previous === undefined ? {} : { previous }) }, deliveries,
   decisions: decisionViews(store, task.id).filter((decision): decision is typeof decision & { confirmedByUser: true } => decision.confirmedByUser),
   questions: questionViews(store, task.id).filter((question): question is typeof question & { status: 'open' } => question.status === 'open') };
@@ -49,15 +50,19 @@ export function confirmWorkspace(store: Store, attempt: AttemptRow, workspace: A
     reject('conflict', 'Only a running implementation can confirm its workspace');
   }
   confirmGitWorkspace(store, attempt, workspace);
+  if (sessionInUse(store, attempt.machine_id, workspace, attempt.task_id)) reject('session_in_use', 'The Pi session belongs to another active task or handover');
   store.run(`UPDATE attempts SET confirmed_workspace_path=?, confirmed_git_kind=?, confirmed_git_branch=?,
-    confirmed_session_id=?, confirmed_session_file=?, session_locator=? WHERE id=?`,
+    confirmed_session_id=?, confirmed_session_file=?, session_locator=?, workspace_path=?, session_id=? WHERE id=?`,
   workspace.path, workspace.gitKind, workspace.gitBranch, workspace.sessionId, workspace.sessionFile,
-  JSON.stringify({ path: workspace.path, sessionId: workspace.sessionId, sessionFile: workspace.sessionFile }), attempt.id);
+  JSON.stringify({ path: workspace.path, sessionId: workspace.sessionId, sessionFile: workspace.sessionFile }), workspace.path, workspace.sessionId, attempt.id);
   return ok;
 }
 
 export function agentControl(store: Store, attempt: AttemptRow): AgentControlResponse {
+  const continuation = store.get<{ step: string }>(
+    "SELECT step FROM session_operations WHERE replacement_id=? AND mode='background'", attempt.id);
   return {
+    ...(continuation ? { continuationReady: continuation.step === 'succeeded' } : {}),
     type: requireTask(store, attempt.task_id).type,
     discussionEndRequested: attempt.discussion_end_requested_at !== null,
     deliverySaved: !!store.get('SELECT 1 FROM deliveries WHERE attempt_id=?', attempt.id),

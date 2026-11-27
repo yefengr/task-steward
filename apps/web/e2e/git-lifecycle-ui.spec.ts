@@ -57,7 +57,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     id: randomUUID(), projectId, title: 'Git 任务', goal: '', acceptance: '', notes: '', agent: 'pi',
     machineId: null, type: 'implementation', baseBranch: null, priority: 'normal', difficulty: 'unassessed',
     status: 'queued', reworkPending: false,
-    position: 1, createdBy: 'user', version: 1, createdAt: 1, updatedAt: 1, waiting: null,
+    position: 1, createdBy: 'user', origin: 'task_board', executionMode: null, version: 1, createdAt: 1, updatedAt: 1, waiting: null,
     needsVerification: false, needsResponse: false, discussionEndRequested: false, git: null, ...overrides,
   };
 }

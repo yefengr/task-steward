@@ -39,6 +39,7 @@ export const launcherGitOperationSchema = z.strictObject({
   baseBranch: gitBranchSchema, baseCommit: gitCommitSchema, taskBranch: gitBranchSchema,
   repositoryPath: gitPathSchema, worktreePath: gitPathSchema, approvedCommit: gitCommitSchema,
   mergedCommit: gitCommitSchema.nullable(), phase: z.enum(['merge', 'cleanup']),
+  foregroundOwner: z.strictObject({ goalId: uuidSchema, pid: z.int().min(2).max(0x7fffffff) }).optional(),
 });
 export const launcherGitReportSchema = requestIdSchema.extend({
   outcome: z.enum(['merged', 'complete', 'blocked', 'needs_rework']),

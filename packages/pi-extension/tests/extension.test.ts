@@ -18,6 +18,7 @@ vi.mock('node:os', async (importOriginal) => {
 
 const executionTools = ['steward_task', 'steward_prepare_git', 'steward_record_workspace', 'steward_progress', 'steward_ask', 'steward_question_update',
   'steward_decision', 'steward_deliver', 'steward_finish'];
+const foregroundTools = ['steward_begin_task', 'steward_interrupt_task'];
 const managementTools = ['steward_list_projects', 'steward_list_tasks', 'steward_get_task', 'steward_create_task', 'steward_update_task'];
 const directories: string[] = [];
 function workspace() {
@@ -75,9 +76,9 @@ it('扩展优先读取新默认配置，升级前的配置仍能使用', async (
   expect(fetcher.mock.calls.map(([url]) => new URL(String(url)).origin)).toEqual(['https://legacy.example', 'https://current.example']);
 });
 
-it('没有有效执行编号时只注册任务管理工具', () => {
+it('没有有效执行编号时一次注册工具，执行需要当前绑定', () => {
   for (const attemptId of [undefined, 'bogus']) {
-    expect(mockTools(vi.fn(), { attemptId }).registerTool.mock.calls.map(([tool]) => tool.name)).toEqual(managementTools);
+    expect(mockTools(vi.fn(), { attemptId }).registerTool.mock.calls.map(([tool]) => tool.name)).toEqual([...managementTools, ...foregroundTools, ...executionTools]);
   }
 });
 
@@ -94,12 +95,12 @@ it.each([false, true])('Pi 资源加载器从 settings.json 加载扩展，自�
   expect(errors).toHaveLength(0);
   expect(extensions.filter((entry) => entry.path === extension)).toHaveLength(1);
   expect([...extensions.find((entry) => entry.path === extension)!.tools.keys()])
-    .toEqual(automatic ? [...managementTools, ...executionTools] : managementTools);
+    .toEqual([...managementTools, ...foregroundTools, ...executionTools]);
 }, 10_000);
 
 function taskContext(path: string): AgentContextResponse {
   return { task: { id: randomUUID(), projectId: 'test', title: '实现', type: 'implementation', goal: '', acceptance: '', notes: '' },
-    attempt: { id: randomUUID(), kind: 'new' }, workspace: { path, requirements: [] }, decisions: [], deliveries: [], questions: [] };
+    attempt: { id: randomUUID(), kind: 'new', executionMode: 'background' }, workspace: { path, requirements: [] }, decisions: [], deliveries: [], questions: [] };
 }
 
 function savedSession(path: string, storage: string) {
@@ -122,7 +123,7 @@ it('仅任务启动会话注入执行规则，原生迁移与手动恢复保留�
   }
   const manual = mockTools(vi.fn());
   manual.useSession(original);
-  expect(await guidelines(manual)).toBe('');
+  expect(await guidelines(manual)).toContain('普通随口问答不建任务');
   agent.useSession(original);
   await agent.fire('session_start', { reason: 'startup' });
   const first = await guidelines(agent);
@@ -143,7 +144,7 @@ it('仅任务启动会话注入执行规则，原生迁移与手动恢复保留�
   expect(historical).toContain('会话历史来源');
   expect(historical).not.toContain('先调用 steward_task');
   expect(historical).not.toContain('回报不能替代项目要求的记录更新');
-  expect(manual.registerTool.mock.calls.map(([tool]) => tool.name)).toEqual(managementTools);
+  expect(manual.registerTool.mock.calls.map(([tool]) => tool.name)).toEqual([...managementTools, ...foregroundTools, ...executionTools]);
 });
 
 it('接续启动只确认已加载的原文件与执行编号，不发送用户消息', async () => {
@@ -261,7 +262,7 @@ it('普通 Pi 使用配对令牌查、建、改任务，写入附带当前会话
   const task = { id: randomUUID(), projectId: 'steward', title: '待办', goal: '', acceptance: '', notes: '', agent: 'pi',
     machineId: null, status: 'unscheduled', reworkPending: false, position: 1, createdBy: 'agent', version: 1,
     createdAt: 1, updatedAt: 1, waiting: null, needsVerification: false, needsResponse: false,
-    type: 'discussion', discussionEndRequested: false, priority: 'high', difficulty: 'complex' };
+    type: 'discussion', discussionEndRequested: false, priority: 'high', difficulty: 'complex', origin: 'legacy', executionMode: null };
   const detail = { task, decisions: [], progress: [], questions: [], deliveries: [], attempts: [], events: [] };
   const updated = { ...task, version: 2, acceptance: '可验证', priority: 'low', difficulty: 'simple' };
   const responses = [{ projects: [] }, { tasks: [task] }, detail, { task }, { task: updated }];

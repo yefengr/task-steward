@@ -54,6 +54,13 @@ export function TaskTypeLabel({ task }: { task: Task }) {
   return <span>{t.taskTypes[task.type]}</span>;
 }
 
+export function TaskOriginLabel({ task }: { task: Task }) {
+  const { t } = useI18n();
+  const mode = task.executionMode === 'background' && task.origin === 'foreground' && task.status === 'running'
+    ? t.execution.continuing : t.execution.modes[task.executionMode ?? 'none'];
+  return <span>{t.execution.origins[task.origin]} · {mode}</span>;
+}
+
 export function TaskFlags({ task }: { task: Task }) {
   const { t } = useI18n();
   return <>

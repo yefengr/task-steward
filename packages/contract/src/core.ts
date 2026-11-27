@@ -9,7 +9,7 @@ export type Agent = z.infer<typeof agentSchema>;
 export const errorCodeSchema = z.enum([
   'unauthorized', 'forbidden', 'not_found', 'invalid_request', 'conflict', 'machine_required',
   'attempt_ended', 'rate_limited', 'internal_error',
-  'session_machine_offline', 'session_unsupported', 'session_record_missing', 'session_slots_full',
+  'session_machine_offline', 'session_unsupported', 'session_record_missing', 'session_slots_full', 'session_workspace_unconfirmed', 'session_in_use', 'session_handover_pending',
 ]);
 export type ErrorCode = z.infer<typeof errorCodeSchema>;
 export const errorResponseSchema = z.strictObject({

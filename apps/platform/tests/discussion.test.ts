@@ -44,7 +44,7 @@ it('从版本 2 升级时保留旧任务与显式问题，旧问题不进入回�
     } finally { prior.connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 8 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 9 });
       expect(upgraded.get('SELECT title,status,type FROM tasks')).toEqual({ title: '原任务', status: 'running', type: 'implementation' });
       expect(upgraded.get('SELECT discussion_end_requested_at FROM attempts')).toEqual({ discussion_end_requested_at: null });
       expect(upgraded.get('SELECT text,context,status,wait_id,wait_since FROM questions')).toEqual({
@@ -90,7 +90,7 @@ it('同一等待组保留首问时间，精确满三分钟提醒，且旧回复�
   x.store.run(`INSERT INTO questions (id,task_id,attempt_id,text,context,status,created_at,updated_at)
     VALUES (?,?,?,?,?,'open',?,?)`, randomUUID(), task.id, id, '历史显式问题', '', x.now() - due, x.now() - due);
   expect((await x.detail(task.id)).task.needsResponse).toBe(false);
-  expect(await control(x, id)).toEqual({ type: 'implementation', discussionEndRequested: false, deliverySaved: false, waitId: null });
+  expect(await control(x, id)).toMatchObject({ type: 'implementation', discussionEndRequested: false, deliverySaved: false, waitId: null });
 
   const firstRequest = request({ text: '首问', context: '背景' });
   const first = c.agentCreateQuestionResponseSchema.parse(await (await x.agent(id, '/questions', firstRequest)).json());
@@ -159,11 +159,11 @@ it('电脑离线且租约过期时仍可持久请求收尾，交付及退出前�
   expect((await x.detail(task.id)).events.filter(({ kind }) => kind === 'discussion_end_requested')).toEqual([
     expect.objectContaining({ actor: 'user', attemptId: id }),
   ]);
-  expect(await control(x, id)).toEqual({ type: 'discussion', discussionEndRequested: true, deliverySaved: false, waitId: question.waitId });
+  expect(await control(x, id)).toMatchObject({ type: 'discussion', discussionEndRequested: true, deliverySaved: false, waitId: question.waitId });
   expect(await ask(x, id, '收尾备注')).not.toHaveProperty('waitId');
 
   expect(await (await x.heartbeat(1, [project], [{ id, tmuxSession: `steward-${id}`, running: true }])).json()).toEqual({
-    directives: [{ attemptId: id, tmuxSession: `steward-${id}`, action: 'continue' }],
+    directives: [{ attemptId: id, tmuxSession: `steward-${id}`, action: 'continue', occupiesSlot: true, workSettled: false }],
   });
   expect(await (await x.claim()).json()).toEqual({ attempt: null });
   const result = await x.agent(id, '/deliveries', report);
@@ -195,7 +195,7 @@ it('Pi 本地收尾可重放，返修需要新请求且只能人工验收最新�
   expect((await x.exit(first.id)).status).toBe(200);
   const retry = await x.claimed();
   expect(retry).toMatchObject({ kind: 'rework', restoreSession: true, sessionId: first.sessionId });
-  expect(await control(x, retry.id)).toEqual({ type: 'discussion', discussionEndRequested: false, deliverySaved: false, waitId: null });
+  expect(await control(x, retry.id)).toMatchObject({ type: 'discussion', discussionEndRequested: false, deliverySaved: false, waitId: null });
   expect((await x.detail(task.id)).questions).toEqual([expect.objectContaining({ id: old.questionId, status: 'open' })]);
   await errorCode(await x.action(task.id, 'end-discussion', { attemptId: first.id }), 409, 'conflict');
   await errorCode(await x.agent(retry.id, '/deliveries', request(delivery)), 409, 'conflict');

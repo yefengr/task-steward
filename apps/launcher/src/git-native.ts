@@ -63,7 +63,7 @@ export async function validateOperation(op: LauncherGitOperation, registered: st
   }
   for (const commit of [op.baseCommit, op.approvedCommit]) if (!gitCommitSchema.safeParse(commit).success) throw new GitFailure('git_invalid_commit');
 }
-export async function verifySource(op: LauncherGitOperation, removed = false) {
+export async function verifySource(op: LauncherGitOperation, removed = false, allowMergeOccupancy = false) {
   const root = op.repositoryPath;
   const all = await records(root);
   const entry = all.find((item) => item.path === op.worktreePath);
@@ -91,7 +91,8 @@ export async function verifySource(op: LauncherGitOperation, removed = false) {
   if (!await ancestor(root, op.baseCommit, op.approvedCommit)) throw new GitFailure('git_base_invalid', true);
   // 沿用 Pi 工作树移除的 Git clean 语义；忽略的依赖/构建产物随专用工作树清理。
   await clean(entry.path);
-  await unused(entry.path);
+  // 仅合并可保留已结算专用 Pi；清理（含 cleanupAccepted 的复核）永不豁免占用检查。
+  if (!allowMergeOccupancy || op.phase !== 'merge') await unused(entry.path);
   return true;
 }
 export async function mergeAccepted(op: LauncherGitOperation) {

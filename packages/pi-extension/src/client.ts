@@ -32,8 +32,9 @@ export function loadConfigWithPath(env: NodeJS.ProcessEnv) {
 
 export type ClientOptions = { env: NodeJS.ProcessEnv; fetcher?: typeof fetch };
 
-export function agentClient(attemptId: string, options: ClientOptions, ownerId?: string) {
+export function agentClient(attemptId: string, options: ClientOptions, ownerId?: string, workRevision = 0) {
   return platformClient('agent', options, { 'X-Steward-Attempt-Id': attemptId,
+    'X-Steward-Work-Revision': String(workRevision),
     ...(ownerId ? { 'X-Steward-Owner-Id': ownerId } : {}) });
 }
 

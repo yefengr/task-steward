@@ -142,7 +142,8 @@ it.each(['interrupt', 'settle'] as const)('前台 %s 只允许同 owner 精确�
   expect((await agent(x, b, `/foreground/${action === 'settle' ? 'interrupt' : 'settle'}`, close)).status).toBe(409);
   expect((await agent(x, b, `/foreground/${action}`, { ...close, extra: true })).status).toBe(400);
   expect((await agent(x, b, '/progress', progress)).status).toBe(409);
-  expect((await agent(x, b, '/context')).status).toBe(409);
+  expect((await agent(x, b, '/context')).status).toBe(action === 'settle' ? 200 : 409);
+  if (action === 'settle') expect(await (await agent(x, b, '/context')).json()).toMatchObject({ implementationAllowed: false, recordAllowed: true });
 });
 it('已确认结束讨论不得改为后台继续', async () => {
   const x = await setup(); const b = await bind(x);

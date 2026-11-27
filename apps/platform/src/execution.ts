@@ -4,7 +4,7 @@ import type { LauncherClaimResponse, LauncherExitedRequest, LauncherHeartbeatReq
 import { reject } from './errors.js';
 import { freezeGitSettings, gitDirectives, gitState } from './git-lifecycle.js';
 import { attemptLocator, confirmedLocator, sameLocator, sessionInUse } from './session-locator.js';
-import { checkReplacementStart, expireSessionPermissions, launchPending, replacementExited, replacementStarted, requestSessionOperation, sessionDirectives } from './session-control.js';
+import { checkReplacementStart, expireSessionPermissions, finishFinalization, launchPending, replacementExited, replacementStarted, requestSessionOperation, sessionDirectives } from './session-control.js';
 import type { Store } from './store.js';
 import { executionMachineSql, isOnline, occupiedSlots, requireMachine, requireTask } from './views.js';
 import type { AttemptRow, TaskRow } from './views.js';
@@ -30,7 +30,7 @@ export function heartbeat(store: Store, machineId: string, input: LauncherHeartb
       store.run('UPDATE attempts SET lease_expires_at=? WHERE id=?', now + LEASE_DURATION_MS, attempt.id);
     }
     if (launchPending(store, attempt.id)) return [];
-    return [{ attemptId: attempt.id, tmuxSession, action: attempt.cancel_requested ? 'cancel' : matched ? 'continue' : 'unknown' }];
+    return [{ attemptId: attempt.id, tmuxSession, workSettled: attempt.settled_at !== null, occupiesSlot: attempt.settled_at === null && (attempt.work_mode ?? attempt.execution_mode) === 'background', action: attempt.cancel_requested ? 'cancel' : matched ? 'continue' : 'unknown' }];
   });
   return { directives, ...(input.gitLifecycle === true ? { gitOperations: gitDirectives(store, machineId) } : {}), ...(input.sessionControl === true ? { sessionOperations: sessionDirectives(store, machineId, now) } : {}) };
 }
@@ -41,7 +41,7 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
   const candidates = store.all<TaskRow & { local_path: string }>(`SELECT t.*, mp.local_path FROM tasks t
     JOIN projects p ON p.id=t.project_id JOIN machine_projects mp ON mp.project_id=t.project_id AND mp.machine_id=?
     WHERE t.status='queued' AND t.agent='pi' AND ${executionMachineSql}=mp.machine_id
-      AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=t.id AND a.ended_at IS NULL)
+      AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=t.id AND a.ended_at IS NULL AND (t.rework_pending=0 OR a.execution_mode<>'background' OR a.settled_at IS NULL))
       AND NOT EXISTS (SELECT 1 FROM session_operations o WHERE o.task_id=t.id AND o.step IN ('stop','launch','cleanup'))
     ORDER BY t.rework_pending DESC, CASE t.priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
       t.position, t.created_at, t.id`, machineId);
@@ -66,7 +66,9 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
       return { attempt: null };
     }
     // 缺定位的返修保持停止，但不能挡住同机其它可执行任务。
-    if (locator) { selected = { task: candidate, previous, locator }; break; }
+    if (locator && previous && (previous.ended_at !== null ||
+        ((candidate.type !== 'implementation' || sameLocator(confirmedLocator(previous), locator)) &&
+        (!gitState(store, candidate.id) || previous.confirmed_git_root === gitState(store, candidate.id)?.worktreePath)))) { selected = { task: candidate, previous, locator }; break; }
   }
   if (!selected) {
     if (candidates.length && !blockedForeground) reject('session_record_missing', 'Rework requires the latest delivered session on its original machine');
@@ -74,6 +76,13 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
   }
   const { task, previous, locator } = selected;
   freezeGitSettings(store, task.id);
+  if (previous?.execution_mode === 'background' && previous.ended_at === null && previous.settled_at !== null) {
+    const workRevision = previous.work_revision + 1;
+    store.run("UPDATE attempts SET work_revision=?,work_mode='background',settled_at=NULL,continuation_pending=1,discussion_end_requested_at=NULL WHERE id=?", workRevision, previous.id);
+    store.run("UPDATE tasks SET status='running',rework_pending=0,lifecycle_phase=NULL,lifecycle_message=NULL,version=version+1,updated_at=? WHERE id=?", now, task.id);
+    store.event(task.id, 'user', previous.id, 'work_continued', { workRevision, source: 'task_board', kind: 'rework' }, now);
+    return { attempt: null };
+  }
   const id = randomUUID();
   const kind = task.rework_pending ? 'rework' : 'new';
   const sessionId = locator?.sessionId ?? tmuxTarget(id);
@@ -116,7 +125,7 @@ export function exited(store: Store, attempt: AttemptRow, input: LauncherExitedR
   if (attempt.execution_mode !== 'background') reject('forbidden', 'Launcher cannot close a foreground owner');
   if (attempt.ended_at !== null) reject('attempt_ended', 'Attempt has ended');
   const task = requireTask(store, attempt.task_id);
-  const delivered = !!store.get('SELECT 1 FROM deliveries WHERE attempt_id=?', attempt.id);
+  const delivered = !!store.get('SELECT 1 FROM deliveries WHERE attempt_id=? AND work_revision=?', attempt.id, attempt.work_revision);
   const result = attempt.cancel_requested ? 'cancelled' : delivered ? 'delivered' : 'interrupted';
   store.run('UPDATE attempts SET ended_at=?, exit_code=?, result=? WHERE id=?', input.endedAt, input.exitCode, result, attempt.id);
   const interrupted = task.status === 'running' && result === 'interrupted';
@@ -124,5 +133,9 @@ export function exited(store: Store, attempt: AttemptRow, input: LauncherExitedR
   store.event(task.id, 'launcher', attempt.id, 'exited', { result, exitCode: input.exitCode,
     ...(interrupted ? { from: 'running', to: 'interrupted' } : {}) }, now);
   replacementExited(store, attempt.id, now);
+  if (task.accepted_at !== null) {
+    store.run("UPDATE session_operations SET step='succeeded',loaded_at=? WHERE source_attempt_id=? AND mode='finalize' AND step='stop'", now, attempt.id);
+    finishFinalization(store, task.id, now);
+  }
   return { ok: true } as const;
 }

@@ -4,9 +4,10 @@ import { AgentError } from './client.js';
 const MAX_PENDING_WRITES = 128;
 const UNCERTAIN_RESULT = new Set(['network_error', 'invalid_response', 'internal_error']);
 
-export function retryableWrites({ cancelledMayHaveSaved = false } = {}) {
+export function retryableWrites({ cancelledMayHaveSaved = false, generation = (): number => 0 } = {}) {
   const pending = new Map<string, { requestId: string; uncertain: boolean; inFlight?: Promise<unknown> }>();
   return async function write<T>(method: string, route: string, args: object, send: (id: string) => Promise<T>): Promise<T> {
+    const epoch = generation();
     const key = createHash('sha256').update(JSON.stringify([method, route, Object.entries(args).sort()])).digest('hex');
     let entry = pending.get(key);
     if (!entry) {
@@ -17,7 +18,11 @@ export function retryableWrites({ cancelledMayHaveSaved = false } = {}) {
     }
     if (entry.inFlight) return entry.inFlight as Promise<T>;
     const current = entry;
-    const inFlight = Promise.resolve().then(() => send(current.requestId)).then((data) => {
+    const inFlight = Promise.resolve().then(() => {
+      if (epoch !== generation()) throw new AgentError('binding_changed');
+      return send(current.requestId);
+    }).then((data) => {
+      if (epoch !== generation()) throw new AgentError('binding_changed');
       pending.delete(key);
       return data;
     }, (error: unknown) => {

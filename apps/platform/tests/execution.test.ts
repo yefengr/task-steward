@@ -59,12 +59,12 @@ it('并发领取只有一次成功，重放领取原结果，保持名额与租�
   expect(await responseOf(c.launcherClaimResponseSchema, await x.claim(winner.r))).toEqual(winner.body);
   x.advance(c.LEASE_DURATION_MS + 1);
   expect((await x.detail(first.id)).task).toMatchObject({ status: 'running', needsVerification: true });
-  expect(await responseOf(c.launcherHeartbeatResponseSchema, await x.heartbeat())).toEqual({ directives: [{ attemptId: attempt.id, tmuxSession, action: 'unknown' }] });
+  expect(await responseOf(c.launcherHeartbeatResponseSchema, await x.heartbeat())).toEqual({ directives: [{ attemptId: attempt.id, tmuxSession, action: 'unknown', occupiesSlot: true, workSettled: false }] });
   expect((await x.detail(first.id)).task.needsVerification).toBe(true);
   await x.heartbeat(1, [project], [{ id: attempt.id, tmuxSession, running: false }]);
   expect((await x.detail(first.id)).task.needsVerification).toBe(true);
   expect(await responseOf(c.launcherHeartbeatResponseSchema, await x.heartbeat(1, [project], [{ id: attempt.id, tmuxSession, running: true }])))
-    .toEqual({ directives: [{ attemptId: attempt.id, tmuxSession, action: 'continue' }] });
+    .toEqual({ directives: [{ attemptId: attempt.id, tmuxSession, action: 'continue', occupiesSlot: true, workSettled: false }] });
   expect((await x.detail(first.id)).task.needsVerification).toBe(false);
   const second = await x.create('第二个');
   await x.action(second.id, 'schedule');
@@ -145,10 +145,10 @@ it('实际现场仅由所属机器的运行中实施尝试确认，可更新且�
 
   expect((await x.agent(a.id, '/deliveries', request(delivery))).status).toBe(200);
   await errorCode(await x.agent(a.id, '/workspace', request({ workspace })), 409, 'conflict');
-  expect((await x.agent(a.id, '/workspace', first)).status).toBe(200);
+  await errorCode(await x.agent(a.id, '/workspace', first), 409, 'conflict');
   expect((await x.exit(a.id)).status).toBe(200);
   await errorCode(await x.agent(a.id, '/workspace', request({ workspace })), 409, 'attempt_ended');
-  expect((await x.agent(a.id, '/workspace', first)).status).toBe(200);
+  await errorCode(await x.agent(a.id, '/workspace', first), 409, 'attempt_ended');
 
   const discussion = await x.create('讨论', { type: 'discussion' });
   await x.action(discussion.id, 'schedule');

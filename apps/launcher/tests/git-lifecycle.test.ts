@@ -91,6 +91,40 @@ it('in-use process blocks source cleanup', async () => {
   try { await expect(verifySource(x.operation)).rejects.toMatchObject({ reason: 'git_worktree_in_use' }); }
   finally { child.kill(); await new Promise<void>((resolve) => child.once('exit', () => resolve())); }
 });
+it('retained dedicated Pi permits merge only; cleanup still refuses its live worktree', async () => {
+  const x = fixture(); const child = spawn('/bin/sleep', ['30'], { cwd: x.source });
+  await new Promise<void>((resolve) => child.once('spawn', resolve));
+  try {
+    const state = loadState(x.file); const id = randomUUID();
+    state.executions.push({ id, target: `steward-${id}`, phase: 'observed', occupiesSlot: false, workSettled: true, identityVerified: true, pid: child.pid });
+    saveState(x.file, state);
+    await x.start().apply(x.operation, false);
+    expect(x.reportGit.mock.lastCall?.[1].outcome).toBe('merged');
+    expect(g(x.root, 'rev-parse', 'main')).toBe(x.accepted);
+    const cleanup = { ...x.operation, phase: 'cleanup' as const, mergedCommit: x.accepted };
+    x.reportGit.mockClear(); await x.start().apply(cleanup, false);
+    expect(x.reportGit).not.toHaveBeenCalled(); expect(existsSync(x.source)).toBe(true);
+    // 即便本地记录丢失，清理的原生占用检查也不可跳过。
+    const lost = loadState(x.file); lost.executions = []; saveState(x.file, lost);
+    await x.start().apply(cleanup, false);
+    expect(x.reportGit.mock.lastCall?.[1]).toMatchObject({ outcome: 'blocked', message: 'git_worktree_in_use' });
+    await expect(verifySource(cleanup, false, true)).rejects.toMatchObject({ reason: 'git_worktree_in_use' });
+  } finally { child.kill(); await new Promise<void>((resolve) => child.once('exit', () => resolve())); }
+});
+it.each([undefined, true, false] as const)('other unsettled or legacy work (%s) blocks merge beside retained Pi', async (occupiesSlot) => {
+  const x = fixture(); const state = loadState(x.file);
+  for (const flag of [false, occupiesSlot]) {
+    const id = randomUUID(); state.executions.push({ id, target: `steward-${id}`, phase: 'observed', occupiesSlot: flag });
+  }
+  saveState(x.file, state); await x.start().apply(x.operation, false);
+  expect(x.reportGit).not.toHaveBeenCalled(); expect(g(x.root, 'rev-parse', 'main')).toBe(x.base);
+});
+it('merge occupancy exception never skips clean/HEAD checks', async () => {
+  const x = fixture(); writeFileSync(join(x.source, 'dirty'), 'dirty');
+  await expect(verifySource(x.operation, false, true)).rejects.toMatchObject({ reason: 'git_dirty' });
+  rmSync(join(x.source, 'dirty')); commit(x.source, 'late');
+  await expect(verifySource(x.operation, false, true)).rejects.toMatchObject({ reason: 'git_source_changed' });
+});
 it('exact FF succeeds and an already accepted ancestor preserves later base commits', async () => {
   const x = fixture(); await mergeAccepted(x.operation); expect(g(x.root, 'rev-parse', 'main')).toBe(x.accepted);
   g(x.root, 'checkout', 'main'); const later = commit(x.root, 'later'); g(x.root, 'checkout', 'maintenance');

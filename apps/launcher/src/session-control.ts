@@ -159,7 +159,15 @@ export class SessionControl {
   private async stop(directive: Extract<LauncherSessionDirective, { step: 'stop' }>, op: SessionOperation, valid: () => boolean) {
     const invalid = this.invalid(directive.locator);
     if (invalid) { this.finish(op, invalid); return; }
-    if (directive.mode === 'background') {
+    if (directive.foregroundOwner && (directive.mode === 'pause' || directive.mode === 'finalize')) {
+      // 普通 Pi 只接受 control 请求后自行退出；启动器不向其 PID 发信号。
+      if (!this.holdForeground(op)) return;
+      const failure = await validateForegroundWorkspace(directive);
+      if (failure) { this.finish(op, failure); return; }
+      if (valid() && await this.sourceGone(directive.attemptId)) this.finish(op);
+      return;
+    }
+    if (directive.mode === 'background' || (directive.mode === 'continue' && directive.foregroundOwner)) {
       const owner = directive.foregroundOwner;
       if (!owner) { this.finish(op, 'session_ownership_unavailable'); return; }
       if (this.tmux.processStatus(owner.pid) === 'alive') { this.finish(op, 'session_source_alive'); return; }
@@ -175,7 +183,8 @@ export class SessionControl {
     const status = await this.tmux.inspect(target);
     if (status === 'absent') {
       const pid = existing?.pid;
-      if ((pid === undefined && directive.sourceEnded) || this.definitelyDead(pid) ||
+      const historicalExit = directive.mode !== 'pause' && directive.mode !== 'finalize' && pid === undefined && directive.sourceEnded;
+      if (historicalExit || this.definitelyDead(pid) ||
           (op.stopIssued && pid !== undefined && await this.remainsStopped(target, pid, valid))) this.finish(op);
       else this.finish(op, 'session_stop_failed');
       return;
@@ -217,7 +226,7 @@ export class SessionControl {
     if (await this.tmux.inspect(target) !== 'absent' || !await this.sourceGone(directive.attemptId)) return;
     const invalid = this.invalid(directive.locator);
     if (invalid) { op.launchIssued = false; this.finish(op, invalid); return; }
-    if (directive.mode === 'background') {
+    if (directive.mode === 'background' || (directive.mode === 'continue' && directive.foregroundOwner)) {
       const failure = !this.holdForeground(op) ? 'session_ownership_unavailable' : await validateForegroundWorkspace(directive);
       if (failure) { op.launchIssued = false; this.finish(op, failure); return; }
     }
@@ -234,7 +243,7 @@ export class SessionControl {
       return;
     }
     try {
-      const pid = directive.mode === 'background'
+      const pid = directive.mode === 'background' || directive.mode === 'continue'
         ? await this.tmux.launchResume(target, id, directive.locator, true)
         : await this.tmux.launchResume(target, id, directive.locator);
       this.rememberPid(record, pid);
@@ -289,6 +298,7 @@ export class SessionControl {
 
   async apply(directive: LauncherSessionDirective, requestStartedAt: PermissionClock) {
     const { id, attemptId, step } = directive;
+    if ((directive.mode === 'pause' || directive.mode === 'finalize') && step !== 'stop') return;
     // 双时钟都必须在授权内：单调钟可能不计睡眠，墙钟也可能被调回。
     const valid = () => step === 'cleanup' || (
       validElapsed(this.options.now() - requestStartedAt.wall, directive.validForMs) &&

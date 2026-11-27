@@ -15,7 +15,7 @@ const ownerTag = createHash('sha256').update(ownerId).digest('hex');
 type Start = Pick<c.ForegroundStartRequest, 'title' | 'goal' | 'acceptance' | 'notes' | 'type'>;
 type Payload = Omit<c.ForegroundStartRequest, 'ownerId' | 'requestId'>;
 type Saved = { goalId: string; start: Start; requestId: string; binding?: c.ForegroundBinding; ended?: boolean;
-  endReason?: 'settle' | 'interrupt' | 'detach'; denied?: boolean; deniedSession?: string;
+  workRevision?: number; endReason?: 'settle' | 'interrupt' | 'detach'; denied?: boolean; deniedSession?: string;
   sent?: boolean; pending?: boolean; deliveryKnown?: boolean; ownerTag?: string; payload?: Payload; closeIds?: Partial<Record<'settle' | 'interrupt', string>>; sessionId: string };
 
 export function registerForeground(pi: ExtensionAPI, options: ClientOptions,
@@ -130,8 +130,8 @@ export function registerForeground(pi: ExtensionAPI, options: ClientOptions,
       localDetachAllowed = false;
       if (changed) { clearInterval(heartbeat); heartbeat = undefined; activate(bound, ctx); }
       if (!heartbeat) {
-        const request = agentClient(bound.attemptId, options, ownerId);
         heartbeat = setInterval(() => {
+          const request = agentClient(data.binding.attemptId, options, ownerId, saved?.workRevision ?? 0);
           // session_handover_pending 仅阻止当前写回；继续心跳等待交接核对结果，不撤销绑定。
           void request('POST', 'foreground/heartbeat', c.okResponseSchema, { requestId: randomUUID() }).catch((error: unknown) => {
             if (bound?.attemptId === data.binding.attemptId && error instanceof AgentError && ['forbidden', 'attempt_ended', 'conflict'].includes(error.code)) suspend();
@@ -167,7 +167,7 @@ export function registerForeground(pi: ExtensionAPI, options: ClientOptions,
     const closing = saved;
     const closeGeneration = generation;
     try {
-      await agentClient((bound ?? replay)!.attemptId, options, ownerId)('POST', `foreground/${route}`, c.okResponseSchema,
+      await agentClient((bound ?? replay)!.attemptId, options, ownerId, saved.workRevision ?? 0)('POST', `foreground/${route}`, c.okResponseSchema,
         { requestId: ids[route] }, signal);
     } catch (error) {
       if (closeGeneration === generation && saved === closing && error instanceof AgentError &&
@@ -179,6 +179,45 @@ export function registerForeground(pi: ExtensionAPI, options: ClientOptions,
     saved.endReason = route;
     remember(); clear();
     return { ok: true };
+  }
+  function recordBinding() {
+    return !forked && saved?.ownerTag === ownerTag && saved.binding && !saved.denied &&
+      saved.sessionId === context?.sessionManager.getSessionId() && (!saved.ended || saved.endReason === 'settle') ? saved.binding : undefined;
+  }
+  async function continueWork<T>(ctx: ExtensionContext, run: () => Promise<T>) {
+    if (busy || !saved || !recordBinding()) throw new AgentError('binding_required');
+    busy = true;
+    const continuing = saved;
+    const current = generation;
+    const hadLock = Boolean(release);
+    let restored = false;
+    try {
+      const locator = await currentSessionLocator(ctx, true);
+      if (!locator || locator.sessionId !== saved.sessionId || locator.sessionFile !== saved.payload?.locator.sessionFile ||
+          locator.path !== saved.payload?.locator.path) throw new AgentError('workspace_unavailable');
+      if (!release) {
+        try { release = acquireExecutionLock(loadConfigWithPath(options.env).configPath, saved.goalId); }
+        catch { throw new AgentError('session_ownership_unavailable'); }
+      }
+      const value = await run();
+      if (current !== generation || saved !== continuing) throw new AgentError('binding_changed');
+      saved.ended = false; saved.endReason = undefined; saved.closeIds = undefined; saved.deliveryKnown = false;
+      bound = saved.binding;
+      remember();
+      if (bound) activate(bound, ctx);
+      if (!heartbeat) heartbeat = setInterval(() => {
+        if (!bound) return;
+        void agentClient(bound.attemptId, options, ownerId, saved?.workRevision ?? 0)('POST', 'foreground/heartbeat',
+          c.okResponseSchema, { requestId: randomUUID() }).catch((error: unknown) => {
+          if (error instanceof AgentError && ['forbidden', 'attempt_ended', 'conflict'].includes(error.code)) suspend();
+        });
+      }, 15_000).unref();
+      restored = true;
+      return value;
+    } finally {
+      if (!restored && !hadLock) { release?.(); release = undefined; }
+      busy = false;
+    }
   }
   pi.on('session_start', (event, ctx) => {
     if (disabled) return;
@@ -195,13 +234,17 @@ export function registerForeground(pi: ExtensionAPI, options: ClientOptions,
   const needsOwnership = () => Boolean(saved?.deniedSession === context?.sessionManager.getSessionId() && saved?.deniedSession) ||
     Boolean(saved && !saved.ended && (saved.binding || saved.denied || (saved.sent && saved.ownerTag !== ownerTag)));
   const recoveryTools = new Set(['read', 'grep', 'find', 'ls', 'steward_begin_task', 'steward_interrupt_task', 'steward_finish',
-    'steward_list_projects', 'steward_list_tasks', 'steward_get_task', 'steward_create_task', 'steward_update_task']);
+    'steward_list_projects', 'steward_list_tasks', 'steward_get_task', 'steward_create_task', 'steward_update_task',
+    'steward_continue', 'steward_revise_delivery']);
   pi.on('tool_call', (event) => {
     if (!disabled && !bound && needsOwnership() && !recoveryTools.has(event.toolName)) {
       return { block: true, reason: '当前目标未取得执行权（或请求结果未知）。先调用 steward_begin_task 恢复，失败不得绕过所有权继续写入、委派或切换工作树。' };
     }
   });
-  return { begin, close, suspend,
+  return { begin, close, suspend, continueWork,
+    get recordBinding() { return recordBinding(); },
+    setWorkRevision(value: number) { if (saved && saved.ownerTag === ownerTag) { saved.workRevision = value; remember(); } },
+    get workRevision() { return saved?.workRevision ?? 0; },
     noteDelivered() { if (saved && bound) { saved.deliveryKnown = true; remember(); } },
     get deliveryKnown() { return !forked && saved?.ownerTag === ownerTag && saved?.deliveryKnown === true; },
     get ownerId() { return ownerId; }, get binding() { return bound; },

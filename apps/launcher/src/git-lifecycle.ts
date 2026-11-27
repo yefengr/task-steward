@@ -73,7 +73,10 @@ export class GitLifecycle {
       if (wasPending) return;
       delete entry.report; delete entry.reportAcknowledged; this.save();
     }
-    if (busy || state.claimRequestId || state.executions.length || state.sessionOperations?.some((item) => !item.reportAcknowledged)) return;
+    const retainedOnly = operation.phase === 'merge' && !operation.foregroundOwner &&
+      state.executions.every((item) => item.phase === 'observed' && item.workSettled === true && item.identityVerified === true);
+    if (busy || state.claimRequestId || (state.executions.length > 0 && !retainedOnly) ||
+      state.sessionOperations?.some((item) => !item.reportAcknowledged)) return;
     const project = config.projects.find((item) => item.id === operation.projectId);
     let release: (() => void) | undefined;
     try {
@@ -89,7 +92,7 @@ export class GitLifecycle {
         entry.merged = true; entry.mergeAcknowledged = true; this.save();
       }
       if (!entry.merged) {
-        await verifySource(operation);
+        await verifySource(operation, false, retainedOnly && state.executions.length > 0);
         entry.mergeIssued = true; this.save();
         await mergeAccepted(operation);
         // merged 与稳定 requestId/body 必须在同一次原子状态保存中落盘。

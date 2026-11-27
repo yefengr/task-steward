@@ -81,6 +81,30 @@ it('主目录存在未提交改动时停止；分支与快照不匹配也停止'
   await mismatch.apply({ ...mismatch.stop, step: 'stop', sourceEnded: false, foregroundGit: { kind: 'linked', branch: 'task' } });
   expect(mismatch.state.sessionOperations?.[0]?.report).toMatchObject({ failure: 'session_workspace_unavailable' });
 });
+it('普通 Pi 暂停后继续必须重新取目标锁，并恢复原 locator 为接续模式', async () => {
+  const x = fixture(); const directive = { ...x.launch, mode: 'continue' as const };
+  const release = acquireExecutionLock(x.configFile, x.goalId);
+  await x.apply(directive);
+  expect(x.tmux.launchResume).not.toHaveBeenCalled(); release();
+  // 拒绝结果只能由平台新操作重试，不能在原幂等操作中改写。
+  const retry = { ...directive, id: randomUUID() };
+  await x.apply(retry); await x.apply(retry);
+  expect(x.tmux.launchResume).toHaveBeenCalledExactlyOnceWith(`steward-${x.replacementId}`, x.replacementId, x.locator, true);
+});
+it.each(['pause', 'finalize'] as const)('普通 Pi 的 %s 不杀源进程，等待死亡和目标锁后才回报', async (mode) => {
+  const x = fixture(); const directive = { ...x.stop, mode };
+  x.processStatus.mockReturnValue('alive'); await x.apply(directive);
+  expect(x.state.sessionOperations?.[0]?.report).toBeUndefined();
+  x.processStatus.mockReturnValue('unavailable'); await x.apply(directive);
+  expect(x.state.sessionOperations?.[0]?.report).toBeUndefined();
+  x.processStatus.mockReturnValue('dead');
+  const release = acquireExecutionLock(x.configFile, x.goalId);
+  await x.apply(directive);
+  expect(x.state.sessionOperations?.[0]?.report).toBeUndefined();
+  release(); await x.apply(directive);
+  expect(x.state.sessionOperations?.[0]?.report).toMatchObject({ result: 'stopped' });
+  expect(x.tmux.cancel).not.toHaveBeenCalled(); expect(x.tmux.launchResume).not.toHaveBeenCalled();
+});
 it('缺少现场文件或进程身份时失败，不创建替代对话', async () => {
   const x = fixture(); rmSync(x.locator.sessionFile);
   await x.apply(x.stop);

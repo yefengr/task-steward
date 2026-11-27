@@ -14,7 +14,7 @@ import { openStore, sha256, Store } from '../src/store.js';
 it('迁移空库并开启外键，重复打开保留版本和数据', () => {
   const store = openStore(':memory:');
   try {
-    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 8 });
+    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 9 });
     expect(store.get('PRAGMA foreign_keys')).toMatchObject({ foreign_keys: 1 });
     expect(store.get('PRAGMA busy_timeout')).toMatchObject({ timeout: 5000 });
     expect(() => store.run('INSERT INTO projects (id,name,last_machine_id,created_at) VALUES (?,?,?,?)', 'project', 'Project', 'missing', 100)).toThrow(/FOREIGN KEY/);
@@ -35,7 +35,7 @@ it('升级原有数据库时建立配对表并保留已有机器及凭据', asyn
     } finally { connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 8 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 9 });
       expect(upgraded.all('SELECT * FROM machine_pairings')).toEqual([]);
       expect(upgraded.get('SELECT name, token_hash FROM machines')).toEqual({ name: 'Existing Mac', token_hash: sha256(token) });
     } finally { upgraded.connection.close(); }
@@ -61,7 +61,7 @@ it('升级三版数据库保留领取目录和会话，旧尝试的实际现场�
     } finally { prior.connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 8 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 9 });
       expect(upgraded.get('SELECT origin FROM tasks')).toEqual({ origin: 'legacy' });
       expect(upgraded.get('SELECT priority, difficulty, created_at FROM tasks WHERE id=?', 'task'))
         .toEqual({ priority: 'normal', difficulty: 'unassessed', created_at: 100 });
@@ -114,7 +114,7 @@ it('七版非空会话操作和请求记录迁移无损，属性、原索引与�
     } finally { prior.connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 8 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 9 });
       expect(upgraded.get("SELECT priority,difficulty,created_at FROM tasks WHERE id='task-0'"))
         .toEqual({ priority: 'high', difficulty: 'complex', created_at: 100 });
       expect(upgraded.all('SELECT * FROM session_operations ORDER BY id')).toEqual(operations);
@@ -155,7 +155,7 @@ it('完整六版库升级保留 Git 配置、快照和创建时间，新增属�
     } finally { prior.connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 8 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 9 });
       expect(upgraded.get('SELECT git_base_branch,git_sync_before_start,git_version FROM projects')).toEqual({
         git_base_branch: 'main', git_sync_before_start: 0, git_version: 3,
       });
@@ -167,7 +167,7 @@ it('完整六版库升级保留 Git 配置、快照和创建时间，新增属�
     } finally { upgraded.connection.close(); }
     const reopened = openStore(path);
     try {
-      expect(reopened.get('PRAGMA user_version')).toEqual({ user_version: 8 });
+      expect(reopened.get('PRAGMA user_version')).toEqual({ user_version: 9 });
       expect(reopened.get('SELECT snapshot FROM task_git WHERE task_id=?', 'task')).toEqual({ snapshot });
     } finally { reopened.connection.close(); }
   } finally { await rm(directory, { recursive: true, force: true }); }

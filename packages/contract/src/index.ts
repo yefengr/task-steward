@@ -9,3 +9,4 @@ export * from './task-management.js';
 export * from './session-control.js';
 export * from './git-lifecycle.js';
 export * from './foreground.js';
+export * from './lifecycle.js';

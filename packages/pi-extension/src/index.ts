@@ -1,3 +1,4 @@
+import { lifecycleBlocked, isReadTool, type Permission } from './lifecycle.js';
 import { registerForeground } from './foreground.js';
 import { claimInstance } from './instance-guard.js';
 import { createHash } from 'node:crypto';
@@ -116,9 +117,9 @@ function registerTaskManagement(pi: ExtensionAPI, options: ClientOptions) {
   });
 }
 
-function deliveryId(attemptId: string) {
-  // 平台每个尝试只接受一份交付。使用派生 UUID，Pi 重载后也能重放同一请求。
-  const hex = createHash('sha256').update(`pi-steward:delivery:${attemptId}`).digest('hex');
+function deliveryId(attemptId: string, revision = 0) {
+  // 每工作段的实施交付使用派生 UUID，Pi 重载后也能重放同一请求。
+  const hex = createHash('sha256').update(`pi-steward:delivery:${attemptId}${revision ? `:${revision}` : ''}`).digest('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
@@ -127,18 +128,34 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
   const attempt = c.uuidSchema.safeParse(options.env.STEWARD_ATTEMPT_ID);
   let activeId = attempt.success ? attempt.data : undefined;
   let epoch = 0;
+  let workRevision = 0;
+  let permission: Permission = {};
+  function adopt(state: Permission) {
+    if (state.workRevision !== undefined && state.workRevision !== workRevision) {
+      epoch++;
+      workRevision = state.workRevision;
+      write = retryableWrites({ generation: () => epoch });
+      requestId = activeId ? deliveryId(activeId, workRevision) : '';
+      delivered = false;
+      taskContext = undefined;
+      foreground.setWorkRevision(workRevision);
+    }
+    permission = state;
+    control.accept(state);
+  }
   const request: ReturnType<typeof agentClient> = async (...args) => {
     if (!activeId) throw new AgentError('binding_required');
     const id = activeId;
     const generation = epoch;
     try {
-      const data = await agentClient(id, options, foreground?.binding ? foreground.ownerId : undefined)(...args);
+      const data = await agentClient(id, options, foreground?.binding ? foreground.ownerId : undefined, workRevision)(...args);
       if (generation !== epoch || id !== activeId) throw new AgentError('binding_changed');
+      if (args[0] === 'GET' && ['context', 'control'].includes(args[1])) adopt(data as Permission);
       return data;
     } catch (error) {
       // 交接核对中的可重试错误不在失权列表内，保留原绑定及 control 轮询。
       if (generation === epoch && id === activeId && foreground.binding && error instanceof AgentError &&
-          ['forbidden', 'attempt_ended', 'conflict', 'session_in_use'].includes(error.code)) foreground.suspend(true, error.code === 'session_in_use');
+          ['forbidden', 'attempt_ended', 'session_in_use'].includes(error.code)) foreground.suspend(true, error.code === 'session_in_use');
       throw error;
     }
   };
@@ -148,17 +165,22 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
   }
   const sessionReport = registerSessionReport(pi, request, options.env.STEWARD_RESUME === '1', !attempt.success);
   const control = registerAttemptControl(pi, activeId ?? '', request, !attempt.success, options.env.STEWARD_CONTINUATION === '1');
-  let write = retryableWrites();
+  let write = retryableWrites({ generation: () => epoch });
+  const recordWrite = retryableWrites();
   let requestId = activeId ? deliveryId(activeId) : '';
   const foreground = registerForeground(pi, options, (binding, ctx) => {
     epoch++;
     activeId = binding.attemptId;
     delivered = false;
     taskContext = undefined;
-    write = retryableWrites();
-    requestId = deliveryId(activeId);
-    control.activate(ctx, activeId, scopedRequest());
-    sessionReport.activate(ctx, scopedRequest());
+    workRevision = foreground.workRevision;
+    permission = {};
+    write = retryableWrites({ generation: () => epoch });
+    requestId = deliveryId(activeId, workRevision);
+    const id = activeId;
+    const boundRequest: ReturnType<typeof agentClient> = (...args) => activeId === id ? request(...args) : Promise.reject(new AgentError('binding_changed'));
+    control.activate(ctx, activeId, boundRequest);
+    sessionReport.activate(ctx, boundRequest);
   }, () => {
     if (attempt.success) return;
     epoch++;
@@ -167,6 +189,25 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
     sessionReport.deactivate();
     delivered = false;
     taskContext = undefined;
+  });
+  pi.on('tool_call', async (event) => {
+    if (!activeId || isReadTool(event.toolName)) return;
+    let state: c.AgentControlResponse;
+    try { state = await request('GET', 'control', c.agentControlResponseSchema); }
+    catch (error) {
+      const reason = error instanceof AgentError && error.code === 'session_handover_pending'
+        ? 'Steward 交接核对中（session_handover_pending），保持原绑定，稍后使用原参数重试；当前不允许写回。'
+        : '无法确认当前工作段权限，禁止执行可能写入的工具；本地只读工具仍可使用。';
+      return { block: true, reason };
+    }
+    if (lifecycleBlocked(event.toolName, state)) return { block: true, reason: '当前工作段已交付、结算或冻结，禁止隐性实施。仅可读取、收尾或经用户明确授权调用 steward_continue / steward_revise_delivery。' };
+  });
+  pi.on('user_bash', async () => {
+    if (!activeId) return;
+    let state: c.AgentControlResponse;
+    try { state = await request('GET', 'control', c.agentControlResponseSchema); }
+    catch { return { result: { output: '无法确认当前工作段权限，禁止执行 shell 命令。', exitCode: 1, cancelled: false, truncated: false } }; }
+    if (lifecycleBlocked('bash', state)) return { result: { output: '当前工作段无实施权限。', exitCode: 1, cancelled: false, truncated: false } };
   });
   registerTaskSession(pi, () => activeId ? (foreground.binding ? 'foreground' : 'background') : false);
   pi.registerTool({
@@ -216,11 +257,12 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
     execute: (_id, { taskBranch }, signal) => report(async () => {
       const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
       if (!data.git && !pi.getAllTools().some((tool) => tool.name === 'worktree_create')) throw new AgentError('git_worktree_capability_required');
+      const scoped = scopedRequest();
       const prepared = await prepareGit(data, taskBranch);
       let snapshot: c.TaskGit;
       if ('phase' in prepared) snapshot = prepared;
       else {
-        const saved = await write('POST', 'git/prepare', prepared, (id) => request('POST', 'git/prepare', c.agentPrepareGitResponseSchema,
+        const saved = await write('POST', 'git/prepare', prepared, (id) => scoped('POST', 'git/prepare', c.agentPrepareGitResponseSchema,
           validatedBody(c.agentPrepareGitRequestSchema, { ...prepared, requestId: id }), signal));
         snapshot = saved.git;
       }
@@ -236,9 +278,10 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
       if (taskContext?.task.type !== 'implementation') throw new AgentError('task_context_required');
       const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
       taskContext = data;
+      const scoped = scopedRequest();
       return sessionReport.workspace(async () => {
         const workspace = await proveWorkspace(ctx, data);
-        await write('POST', 'workspace', workspace, (requestId) => request('POST', 'workspace', c.okResponseSchema,
+        await write('POST', 'workspace', workspace, (requestId) => scoped('POST', 'workspace', c.okResponseSchema,
           validatedBody(c.agentWorkspaceRequestSchema, { workspace, requestId }), signal));
         return { ok: true, workspace };
       });
@@ -277,23 +320,84 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
     execute: (_id, args, signal, _update, ctx) => report(async () => {
       const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
       if (data.task.type === 'discussion' && !control.discussionEndConfirmed) throw new AgentError('discussion_end_required');
+      const scoped = scopedRequest();
+      const id = requestId;
       if (data.git) await proveWorkspace(ctx, data, args);
-      const saved = await request('POST', 'deliveries', c.agentDeliveryResponseSchema,
-        validatedBody(c.agentDeliveryRequestSchema, { ...args, ...(data.git ? { baseCommit: args.baseCommit ?? data.git.baseCommit } : {}), requestId }), signal);
+      const saved = await scoped('POST', 'deliveries', c.agentDeliveryResponseSchema,
+        validatedBody(c.agentDeliveryRequestSchema, { ...args, ...(data.git ? { baseCommit: args.baseCommit ?? data.git.baseCommit } : {}), requestId: id }), signal);
       delivered = true;
       foreground.noteDelivered();
       return saved;
     }),
   });
+  function recordRequest(): ReturnType<typeof agentClient> {
+    const binding = foreground.recordBinding;
+    const id = activeId ?? binding?.attemptId;
+    if (!id || (!attempt.success && !binding)) throw new AgentError('binding_required');
+    return agentClient(id, options, binding ? foreground.ownerId : undefined, activeId ? workRevision : foreground.workRevision);
+  }
   pi.registerTool({
-    name: 'steward_finish', executionMode: 'sequential', label: '结束 Steward 执行', description: '交付已保存后收尾：前台仅结束本目标并解除绑定、保留 Pi；后台请求 Pi 退出。',
+    name: 'steward_continue', executionMode: 'sequential', label: '授权原会话继续实施',
+    description: '仅当用户在原会话明确授权实质续做时调用。在原 attempt、会话和现场开启新工作段，不是恢复历史，不另建任务。',
+    parameters: Type.Object({ deliveryId: Type.String(), reason: text(), authorizedByUser: Type.Literal(true) }),
+    execute: (_id, args, signal, _update, ctx) => report(async () => {
+      const request = recordRequest();
+      const id = activeId ?? foreground.recordBinding!.attemptId;
+      const nonce = deliveryId(`${id}:continue:${JSON.stringify([args.deliveryId, args.reason, args.authorizedByUser])}`);
+      const entryType = 'steward-continue-intent';
+      const replay = ctx.sessionManager.getEntries().some((entry) => entry.type === 'custom' &&
+        entry.customType === entryType && entry.data === nonce);
+      const run = async () => {
+        if (!replay) {
+          const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
+          if (data.recordAllowed === false) throw new AgentError('forbidden');
+          // 只结算本次授权指向的已交付段，绝不结算重放时的新工作段。
+          if (data.latestDeliveryId !== args.deliveryId || !['delivered', 'settled'].includes(data.phase ?? '')) throw new AgentError('conflict');
+          if (!data.settled) await recordWrite('POST', 'settle', { attemptId: id, workRevision: data.workRevision },
+            (requestId) => request('POST', 'settle', c.okResponseSchema, { requestId }, signal));
+          pi.appendEntry(entryType, nonce);
+        }
+        const saved = await request('POST', 'continue', c.agentContinueResponseSchema,
+          validatedBody(c.agentContinueRequestSchema, { ...args, requestId: nonce }), signal);
+        // 回执不授予权限；即使原 nonce 成功重放，也必须重新读取当前权限。
+        const state = await request('GET', 'control', c.agentControlResponseSchema, undefined, signal);
+        adopt(state);
+        if (lifecycleBlocked('write', state)) throw new AgentError('forbidden');
+        return saved;
+      };
+      return attempt.success ? run() : foreground.continueWork(ctx, run);
+    }),
+  });
+  pi.registerTool({
+    name: 'steward_revise_delivery', executionMode: 'sequential', label: '仅修订交付记录',
+    description: '仅当用户明确授权补记录时提交完整新版报告。保留原 SHA/base 和旧版本，不重开实施、不重新验证现场。',
+    parameters: Type.Object({ ...deliveryParameters.properties, deliveryId: Type.String(), reason: text(), authorizedByUser: Type.Literal(true) }),
+    execute: (_id, args, signal) => report(async () => {
+      const request = recordRequest();
+      const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
+      if (data.recordAllowed === false) throw new AgentError('forbidden');
+      const source = data.deliveries.find((delivery) => delivery.id === args.deliveryId);
+      if (!source) throw new AgentError('conflict');
+      // schema 固定字段顺序；同值参数以不同 JSON 键顺序重试也必须重放同一修订。
+      const content = validatedBody(c.agentDeliveryRevisionRequestSchema.omit({ requestId: true }),
+        { ...args, commit: source.commit, baseCommit: source.baseCommit });
+      const requestId = deliveryId(`${data.attempt.id}:record:${JSON.stringify(content)}`);
+      return request('POST', 'delivery-revisions', c.agentDeliveryResponseSchema,
+        validatedBody(c.agentDeliveryRevisionRequestSchema, { ...content, requestId }), signal);
+    }),
+  });
+  pi.registerTool({
+    name: 'steward_finish', executionMode: 'sequential', label: '结束 Steward 执行', description: '交付已保存且实施、验证和必要回报全部收尾后结算本工作段。普通 Pi 解绑，专用 Pi 保持绑定与轮询；均不退出。',
     parameters: Type.Object({}),
-    async execute(_id, _args, signal, _update, ctx): Promise<AgentToolResult<{ code: string } | { ok: boolean }>> {
-      if (!delivered && !control.deliverySaved && !foreground.deliveryKnown) return result('尚未确认保存交付，不能结束。若用户要放弃任务，请用户在平台取消或在 Pi 中直接退出。',
-        { code: 'delivery_required' });
-      if (!attempt.success) return report(() => foreground.close('settle', signal));
-      control.finish(ctx);
-      return result('已请求 Pi 在本轮结束后退出。', { ok: true });
+    async execute(_id, _args, signal): Promise<AgentToolResult<{ code: string } | { ok: boolean }>> {
+      return report(async () => {
+        await request('GET', 'control', c.agentControlResponseSchema, undefined, signal);
+        if (!delivered && !control.deliverySaved) throw new AgentError('delivery_required');
+        if (!attempt.success) return foreground.close('settle', signal);
+        const saved = await write('POST', 'settle', {}, (id) => request('POST', 'settle', c.okResponseSchema, { requestId: id }, signal));
+        permission = { ...permission, settled: true, implementationAllowed: false };
+        return saved;
+      });
     },
   });
 }

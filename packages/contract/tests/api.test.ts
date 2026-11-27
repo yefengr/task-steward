@@ -9,7 +9,8 @@ const token = `stm_${'A'.repeat(43)}`;
 const tokenHash = 'a'.repeat(64);
 const ok = { ok: true };
 const projectId = 'pi-steward';
-const taskContent = { title: '标题', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null, type: 'implementation' };
+const taskContent = { title: '标题', goal: '', acceptance: '', notes: '', agent: 'pi', machineId: null, type: 'implementation',
+  priority: 'normal', difficulty: 'unassessed' };
 const task = { ...taskContent, id, projectId, status: 'queued', reworkPending: false, position: 1, createdBy: 'user',
   version: 1, createdAt: 100, updatedAt: 200, waiting: null, needsVerification: false, needsResponse: false };
 const attempt = { id, taskId: id, machineId: id, machineName: 'Mac', agent: 'pi', kind: 'new', sessionId: tmuxSession,
@@ -60,6 +61,7 @@ const samples = {
   textSchema: ['', null], nonEmptyTextSchema: ['正文', '\n '], machineTokenSchema: [`stm_${'A'.repeat(43)}`, 'stm_short'],
   tmuxSessionSchema: [tmuxSession, 'another-session'], emptyRequestSchema: [{}, { extra: true }],
   okResponseSchema: [ok, { ok: false }], requestIdSchema: [request, { requestId: '' }],
+  taskPrioritySchema: ['high', 'urgent'], taskDifficultySchema: ['complex', 'hard'],
   taskTypeSchema: ['discussion', 'chat'], titleSchema: [' 标题 ', ' '], attemptKindSchema: ['resume', 'retry'], attemptResultSchema: ['delivered', 'done'],
   waitingReasonSchema: ['previous_attempt_active', 'rework'], questionStatusSchema: ['open', 'unknown'], slotsSchema: [0, -1],
   taskContentSchema: [taskContent, { ...taskContent, machineId: '' }], taskSchema: [task, { ...task, needsVerification: 'yes' }],

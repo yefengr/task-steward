@@ -65,6 +65,10 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
 const editableTask = {
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
   goal: Type.Optional(text()), acceptance: Type.Optional(text()), notes: Type.Optional(text()),
+  priority: Type.Optional(Type.Union([Type.Literal('high'), Type.Literal('normal'), Type.Literal('low')])),
+  difficulty: Type.Optional(Type.Union([
+    Type.Literal('unassessed'), Type.Literal('simple'), Type.Literal('medium'), Type.Literal('complex'),
+  ])),
   baseBranch: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 };
 
@@ -90,7 +94,7 @@ function registerTaskManagement(pi: ExtensionAPI, options: ClientOptions) {
       `tasks/${validatedBody(c.uuidSchema, taskId)}`, c.webTaskDetailResponseSchema, undefined, signal)),
   });
   pi.registerTool({
-    name: 'steward_create_task', label: '新建 Steward 待办', description: '应用户要求新建待办，不安排执行。选择 discussion（讨论）或 implementation（实现，默认）。网络请求结果未知时使用原参数重试。',
+    name: 'steward_create_task', label: '新建 Steward 待办', description: '应用户要求新建待办，不安排执行。选择 discussion（讨论）或 implementation（实现，默认）；可设置 priority（high/normal/low，默认 normal）和 difficulty（unassessed/simple/medium/complex，默认 unassessed，仅供人工参考，不选择智能体）。网络请求结果未知时使用原参数重试。',
     parameters: Type.Object({ ...editableTask, projectId: projectIdParameter, title: Type.String({ minLength: 1, maxLength: 500 }),
       type: Type.Optional(Type.Union([Type.Literal('discussion'), Type.Literal('implementation')])) }),
     execute: (_id, args, signal, _update, ctx) => report(() => {
@@ -100,7 +104,7 @@ function registerTaskManagement(pi: ExtensionAPI, options: ClientOptions) {
     }),
   });
   pi.registerTool({
-    name: 'steward_update_task', label: '修改 Steward 任务', description: '应用户要求修改标题、目标、验收要求或备注。传入读到的版本；若版本冲突，先重新读取并核对差异。',
+    name: 'steward_update_task', label: '修改 Steward 任务', description: '应用户要求修改标题、目标、验收要求、备注、优先级或难度（仅供人工参考）。传入读到的版本；若版本冲突，先重新读取并核对差异。',
     parameters: Type.Object({ ...editableTask, taskId: Type.String(), version: Type.Integer({ minimum: 1 }) }),
     execute: (_id, { taskId, ...args }, signal, _update, ctx) => report(() => {
       const route = `tasks/${validatedBody(c.uuidSchema, taskId)}`;

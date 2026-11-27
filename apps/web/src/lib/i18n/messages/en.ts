@@ -32,6 +32,8 @@ export const en = {
   taskTypes: { discussion: 'Discussion', implementation: 'Implementation' },
   execution: { mode: 'Execution mode', origins: { foreground: 'Started in foreground', task_board: 'Dispatched from task board', legacy: 'Legacy origin not recorded' },
     modes: { foreground: 'Foreground execution', background: 'Background execution', none: 'Not started' }, continuing: 'Continuing in background' },
+  priorities: { high: 'High', normal: 'Normal', low: 'Low' },
+  difficulties: { unassessed: 'Unassessed', simple: 'Simple', medium: 'Medium', complex: 'Complex' },
   git: {
     section: 'Git integration', settings: 'Git settings', defaultBranch: 'Default base branch',
     baseBranch: 'Base branch', baseCommit: 'Base commit', taskBranch: 'Task branch',
@@ -65,6 +67,9 @@ export const en = {
     machine_offline: 'The execution machine is offline', slots_full: 'All execution slots are occupied',
   },
   form: { title: 'Task title', type: 'Type', goal: 'Goal', acceptance: 'Acceptance criteria', notes: 'Notes', agent: 'Agent', machine: 'Execution machine',
+    priority: 'Priority', difficulty: 'Difficulty',
+    priorityHint: 'Affects future claims after rework priority. Does not schedule or interrupt tasks.',
+    difficultyHint: 'Simple: clear, local, low risk. Medium: coordination needed, approach mostly clear. Complex: greater uncertainty or risk. Not a time estimate; does not select an agent.',
     auto: 'Use last machine', claude: 'Claude Code (not supported yet)', feedback: 'Rework feedback', required: 'This field is required.', invalid: 'Check the length of the text.' },
   machine: {
     none: 'No machines are registered yet.', online: 'Online', offline: 'Offline', revoked: 'Revoked', lastSeen: 'Last heartbeat',
@@ -72,7 +77,7 @@ export const en = {
   },
   task: {
     needsResponse: 'Reply in the original Pi session', responseFlag: 'Awaiting response', earlierProgress: 'Earlier updates', needsVerification: 'Needs verification', reworkPending: 'Rework queued', createdByAgent: 'Created by Agent',
-    discussionEndRequested: 'End requested', questionHistory: 'Discussion history',
+    discussionEndRequested: 'End requested', questionHistory: 'Discussion history', createdAt: 'Created',
     management: 'Task management', attention: 'Needs attention', verificationHint: 'The execution lease expired. Waiting for the launcher to verify the attempt.',
     interruptedHint: 'The last attempt ended without a delivery. You can schedule it again.', goalSection: 'Goal and agreements',
     decisions: 'Recorded decisions', confirmed: 'Confirmed by user', suggested: 'Unconfirmed', progress: 'Current progress', noProgress: 'No progress reported yet.',

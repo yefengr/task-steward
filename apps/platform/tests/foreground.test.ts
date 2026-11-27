@@ -16,7 +16,7 @@ async function bind(x: Fixture, body: ForegroundStartRequest = input()) {
 function agent(x: Fixture, b: Awaited<ReturnType<typeof bind>>, path: string, body?: object, owner = b.body.ownerId) {
   return x.send(`/agent${path}`, body, { machine: x.token, attempt: b.attemptId, headers: { 'X-Steward-Owner-Id': owner } });
 }
-it('离线 start 永久去重，同进程 reload 更新真实定位，前台不占槽且心跳不接管', async () => {
+it('离线 start 永久去重，同进程多轮复用绑定，前台不占槽且心跳不接管', async () => {
   const x = await setup(); const b = await bind(x);
   x.advance(8 * 86400_000);
   const retry = await bind(x, { ...b.body, ...request(), title: '不覆盖' });
@@ -29,6 +29,16 @@ it('离线 start 永久去重，同进程 reload 更新真实定位，前台不�
   expect((await x.agent(b.attemptId, '/context')).status).toBe(403);
   expect((await agent(x, b, '/context')).status).toBe(200);
   expect(JSON.stringify(await x.detail(b.taskId))).not.toContain(b.body.ownerId);
+});
+it('前台任务使用属性默认值，重绑保留已编辑属性和创建时间', async () => {
+  const x = await setup(); const b = await bind(x);
+  const task = (await x.detail(b.taskId)).task;
+  expect(task).toMatchObject({ priority: 'normal', difficulty: 'unassessed' });
+  expect((await x.web(`/tasks/${b.taskId}`, { version: task.version, priority: 'high', difficulty: 'complex' }, 'PATCH')).status).toBe(200);
+  x.advance(1_000);
+  const next = await bind(x, { ...b.body, ...request(), previousAttemptId: b.attemptId, previousOwnerPid: b.pid });
+  expect(next.taskId).toBe(b.taskId);
+  expect((await x.detail(b.taskId)).task).toMatchObject({ priority: 'high', difficulty: 'complex', createdAt: task.createdAt, origin: 'foreground' });
 });
 it('精确源 CAS 恢复拒绝不同 owner 和机器历史权限，缓存不复活旧 attempt', async () => {
   const x = await setup(); const b = await bind(x);

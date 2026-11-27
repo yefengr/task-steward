@@ -10,6 +10,7 @@ import { GitPhaseChip, StatusChip, TaskFlags, TaskTypeLabel, TaskOriginLabel, Wa
 import { GitSection } from './git-section';
 import { TaskControls } from './task-controls';
 import { TaskForm } from './task-form';
+import { TaskAttributes, TaskCreatedAt } from './task-attributes';
 import { DateTime, Deliveries, DiscussionHistory, Records } from './task-records';
 
 function Attention({ detail }: { detail: WebTaskDetailResponse }) {
@@ -105,6 +106,8 @@ export default function TaskDetail({ detail, project, machines, onChanged }: {
         <span>{t.form.agent} · {task.agent === 'pi' ? 'Pi' : t.form.claude}</span>
         <span>{t.form.machine} · {machineName}</span>
         {task.createdBy === 'agent' && <span>{t.task.createdByAgent}</span>}
+        <TaskAttributes task={task} />
+        <TaskCreatedAt task={task} />
       </div>
       {task.status === 'queued' && <div className="waiting-banner"><WaitReason task={task} />
         {task.reworkPending && <span className="chip">{t.task.reworkPending}</span>}</div>}

@@ -201,12 +201,16 @@ export class Launcher {
     const { attemptId: id, tmuxSession: target, action } = directive;
     if (target !== targetFor(id)) return;
     let record = this.state.executions.find((item) => item.id === id);
+    if (record) {
+      record.occupiesSlot = action !== 'continue' || directive.occupiesSlot !== false;
+      this.persist();
+    }
     if (record?.phase === 'exited' || (action === 'continue' && record?.phase === 'observed')) return;
     const status = await this.options.tmux.inspect(target);
     if (status === 'unavailable') return;
     if (!record) {
       // 即使状态文件丢失，也只认平台指令给出的精确目标和本机查询结果。
-      record = { id, target, phase: 'observed' };
+      record = { id, target, phase: 'observed', occupiesSlot: action !== 'continue' || directive.occupiesSlot !== false };
       this.state.executions.push(record);
       if (status === 'present') this.persist();
     }
@@ -250,6 +254,16 @@ export class Launcher {
 
   private async reconcile({ response, requestStartedAt }: Heartbeat, claimPending = false) {
     const operations = response.sessionOperations ?? [];
+    // 只有本轮精确目标的明确确认才能释放额度；旧状态和未知/缺失指令失败关闭。
+    for (const record of this.state.executions) {
+      const directive = response.directives.find((item) => item.attemptId === record.id && item.tmuxSession === record.target);
+      record.occupiesSlot = directive?.action !== 'continue' || directive.occupiesSlot !== false;
+      record.workSettled = directive?.action === 'continue' && directive.workSettled === true;
+      // 不占后台名额不等于工作已结束；合并豁免还必须核对仍是原来的进程。
+      record.identityVerified = record.workSettled && record.phase === 'observed' && record.pid !== undefined &&
+        await this.options.tmux.panePid(record.target) === record.pid && this.options.tmux.processStatus(record.pid) === 'alive';
+    }
+    this.persist();
     this.control.reconcileForegroundLocks(new Set(operations.map(({ id }) => id)));
     const protectedIds = await this.reconcileSessionOperations(operations, requestStartedAt);
     for (const directive of response.directives) {
@@ -274,7 +288,8 @@ export class Launcher {
       if (record.phase === 'exited' && !pending.has(record.id)) this.remove(record.id);
       else if (record.phase === 'prepared' && await this.options.tmux.inspect(record.target) === 'absent') this.remove(record.id);
     }
-    const gitBusy = claimPending || response.directives.length > 0 || operations.length > 0 || this.state.outbox.length > 0;
+    const gitBusy = claimPending || response.directives.some((item) => item.action !== 'continue' || item.workSettled !== true) ||
+      operations.length > 0 || this.state.outbox.length > 0;
     for (const operation of response.gitOperations ?? []) await this.gitLifecycle.apply(operation, gitBusy);
   }
 
@@ -314,9 +329,11 @@ export class Launcher {
     if (!flushed || !await this.flush() || replayed) return;
     const slots = this.options.config.slots;
     const activeCount = new Set([
-      ...heartbeat.response.directives.map(({ attemptId }) => attemptId),
+      ...heartbeat.response.directives.filter(({ action, occupiesSlot }) => action !== 'continue' || occupiesSlot !== false)
+        .map(({ attemptId }) => attemptId),
       ...(heartbeat.response.sessionOperations ?? []).map(managedId),
-      ...this.state.executions.filter(({ phase }) => phase !== 'exited').map(({ id }) => id),
+      ...this.state.executions.filter(({ phase, occupiesSlot }) => phase !== 'exited' &&
+        (phase !== 'observed' || occupiesSlot !== false)).map(({ id }) => id),
     ]).size;
     if (activeCount >= slots || !await this.canClaim()) return;
     if (!await this.claim()) return;

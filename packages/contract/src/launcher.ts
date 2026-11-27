@@ -17,6 +17,7 @@ export const launcherHeartbeatRequestSchema = requestIdSchema.extend({
 export const launcherHeartbeatResponseSchema = z.strictObject({
   directives: z.array(z.strictObject({
     attemptId: uuidSchema, tmuxSession: tmuxSessionSchema, action: z.enum(['continue', 'cancel', 'unknown']),
+    occupiesSlot: z.boolean().optional(), workSettled: z.boolean().optional(),
   })),
   sessionOperations: z.array(launcherSessionDirectiveSchema).optional(),
   gitOperations: z.array(launcherGitOperationSchema).optional(),

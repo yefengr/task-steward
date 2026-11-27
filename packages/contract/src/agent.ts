@@ -4,6 +4,7 @@ import { attemptKindSchema, decisionSchema, deliveryContentSchema, deliverySchem
 
 import { piSessionLocatorSchema } from './session-control.js';
 import { gitPathSchema, resolvedGitSettingsSchema, taskGitSchema } from './git-lifecycle.js';
+import { agentContinueRequestSchema, workPermissionSchema } from './lifecycle.js';
 
 const gitBranch = z.string().min(1).max(1024).regex(/^[^\0\r\n]+$/u);
 export const attemptWorkspaceSchema = piSessionLocatorSchema.extend({
@@ -14,7 +15,7 @@ export type AttemptWorkspace = z.infer<typeof attemptWorkspaceSchema>;
 export const agentWorkspaceRequestSchema = requestIdSchema.extend({ workspace: attemptWorkspaceSchema });
 export type AgentWorkspaceRequest = z.infer<typeof agentWorkspaceRequestSchema>;
 
-export const agentContextResponseSchema = z.strictObject({
+export const agentContextResponseSchema = workPermissionSchema.extend({
   task: taskContentSchema.pick({ title: true, goal: true, acceptance: true, notes: true }).extend({
     id: uuidSchema, projectId: projectIdSchema, type: taskTypeSchema.default('implementation'),
   }),
@@ -30,9 +31,9 @@ export const agentContextResponseSchema = z.strictObject({
   decisions: z.array(decisionSchema.extend({ confirmedByUser: z.literal(true) })),
   deliveries: z.array(deliverySchema), questions: z.array(questionSchema.extend({ status: z.literal('open') })),
 });
-export const agentControlResponseSchema = z.strictObject({
+export const agentControlResponseSchema = workPermissionSchema.extend({
   type: taskTypeSchema, discussionEndRequested: z.boolean(), deliverySaved: z.boolean(), waitId: uuidSchema.nullable(),
-  continuationReady: z.boolean().optional(),
+  continuationReady: z.boolean().optional(), pauseRequested: z.boolean().optional(), closeRequested: z.boolean().optional(),
 });
 export const agentEndDiscussionRequestSchema = requestIdSchema;
 export const agentReplyRequestSchema = requestIdSchema.extend({ waitId: uuidSchema });
@@ -48,6 +49,8 @@ export const agentDecisionRequestSchema = agentProgressRequestSchema.extend({ co
 export const agentDecisionResponseSchema = okResponseSchema;
 export const agentDeliveryRequestSchema = deliveryContentSchema.extend(requestIdSchema.shape);
 export const agentDeliveryResponseSchema = z.strictObject({ deliveryId: uuidSchema, version: z.int().positive() });
+export const agentDeliveryRevisionRequestSchema = deliveryContentSchema.extend(agentContinueRequestSchema.shape);
+export type AgentDeliveryRevisionRequest = z.infer<typeof agentDeliveryRevisionRequestSchema>;
 
 export type AgentContextResponse = z.infer<typeof agentContextResponseSchema>;
 export type AgentDeliveryRequest = z.infer<typeof agentDeliveryRequestSchema>;

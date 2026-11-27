@@ -39,7 +39,8 @@ export function startForeground(store: Store, machineId: string, input: Foregrou
     taskId = existing.task_id;
     const task = requireTask(store, taskId);
     source = store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? ORDER BY claimed_at DESC, rowid DESC LIMIT 1', taskId);
-    if (!source || source.execution_mode !== 'foreground' || source.cancel_requested || gitLocked(store, taskId) ||
+    if (!source || source.execution_mode !== 'foreground' || source.cancel_requested || task.accepted_at !== null ||
+        ['paused', 'pausing', 'merging', 'cleanup_pending', 'cleanup_blocked', 'complete'].includes(task.lifecycle_phase ?? '') || gitLocked(store, taskId) ||
         !['running', 'interrupted'].includes(task.status) || store.get('SELECT 1 FROM deliveries WHERE task_id=?', taskId)) {
       reject('conflict', 'Goal cannot grant foreground ownership in its current state');
     }

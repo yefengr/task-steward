@@ -68,18 +68,24 @@ async function realDiscussion({ web, launcher, now, setClock, setOffline, socket
         assert.ok(paneHas('普通讨论回合已完成'));
         setOffline(false);
       }
-      const delivery = await until('讨论结论交付并退出', async () => {
+      const delivery = await until('讨论结论交付结算并保留 Pi', async () => {
         await launcher().tick();
         const detail = await web(path);
-        if (detail.attempts[0]?.endedAt == null) return undefined;
-        assert.equal(detail.attempts[0].result, 'delivered');
+        if (detail.task.lifecycle?.phase !== 'settled' || !detail.deliveries[0]) return undefined;
+        assert.equal(detail.attempts[0].endedAt, null);
         assert.equal(detail.task.status, 'review');
+        assert.equal((await web('/machines')).machines[0].occupiedSlots, 0);
+        assert.ok(paneHas('讨论结论'));
         return detail.deliveries[0];
       });
       assert.equal(delivery.summary, '讨论结论：采用现有流程');
       assert.deepEqual(delivery.issues, ['待确认下一步']);
       await web(`${path}/accept`, { deliveryId: delivery.id });
-      assert.equal((await web(path)).task.status, 'done');
+      await until('人工验收后确认专用 Pi 退出', async () => {
+        await launcher().tick();
+        const detail = await web(path);
+        return detail.task.status === 'done' && detail.attempts[0].endedAt !== null;
+      });
       setClock(now() + 1_000);
       console.log(`真实 Pi 冒烟通过：${entry === 'session' ? '会话输入结束讨论' : '工作台离线请求、恢复后收尾'}。`);
     } catch (error) {

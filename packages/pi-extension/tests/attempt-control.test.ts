@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { registerAttemptControl } from '../src/attempt-control.js';
 import { AgentError, agentClient } from '../src/client.js';
 
-function fixture(type: AgentControlResponse['type'] = 'discussion', continuation = false) {
+function fixture(type: AgentControlResponse['type'] = 'discussion', continuation = false, manual = false) {
   vi.useFakeTimers();
   const state: AgentControlResponse = { type, waitId: null, discussionEndRequested: false, deliverySaved: false };
   const handlers = vi.fn<ExtensionAPI['on']>();
@@ -32,7 +32,7 @@ function fixture(type: AgentControlResponse['type'] = 'discussion', continuation
   function register() {
     handlers.mockClear();
     return registerAttemptControl({ on: handlers, sendMessage, appendEntry } as unknown as ExtensionAPI,
-      attemptId, request as unknown as ReturnType<typeof agentClient>, false, continuation);
+      attemptId, request as unknown as ReturnType<typeof agentClient>, manual, continuation);
   }
   const control = register();
   async function fire(name: string, event = {}) {
@@ -41,7 +41,7 @@ function fixture(type: AgentControlResponse['type'] = 'discussion', continuation
     await handler({ type: name, ...event } as never, ctx);
   }
   const tick = (ms = 5_000) => vi.advanceTimersByTimeAsync(ms);
-  const start = async () => { await fire('session_start'); await tick(0); };
+  const start = async () => { if (manual) control.activate(ctx); else await fire('session_start'); await tick(0); };
   return { state, sendMessage, shutdown, notify, isIdle, request, control, register, fire, tick, start,
     setOffline: (value: boolean) => { offline = value; }, failReply: () => { failNextReply = true; } };
 }
@@ -74,6 +74,55 @@ it('用户先输入时不在其后追加自动接续，发送结果未知也不�
   expect(g.sendMessage).toHaveBeenCalledTimes(1); expect(g.notify).toHaveBeenCalledWith(expect.stringContaining('未重复发送'), 'warning');
   await g.fire('session_shutdown');
 });
+it.each([false, true])('暂停请求使用原生 shutdown，普通 Pi=%s；close 不关闭普通 Pi', async (manual) => {
+  const f = fixture('implementation', false, manual); await f.start();
+  f.state.closeRequested = true; await f.tick();
+  expect(f.shutdown).toHaveBeenCalledTimes(manual ? 0 : 1);
+  if (manual) { f.state.closeRequested = false; f.state.pauseRequested = true; await f.tick(); expect(f.shutdown).toHaveBeenCalledTimes(1); }
+  await f.fire('session_shutdown');
+});
+it('后台原进程新工作段按 revision 一次接续，用户先发消息则不追加', async () => {
+  const f = fixture('implementation'); f.state.workRevision = 1; f.state.continuationReady = true;
+  await f.start(); await f.tick(10_000); expect(f.sendMessage).toHaveBeenCalledTimes(1);
+  f.state.workRevision = 2; await f.tick(); expect(f.sendMessage).toHaveBeenCalledTimes(2);
+  await f.fire('session_shutdown');
+  const g = fixture('implementation'); g.state.workRevision = 1; g.state.continuationReady = false;
+  await g.start(); await g.fire('input', { text: '先核对授权', source: 'interactive' });
+  g.state.continuationReady = true; await g.tick(); expect(g.sendMessage).not.toHaveBeenCalled(); await g.fire('session_shutdown');
+});
+
+it('poll 尚未刷新新 revision 时用户先输入，抑制实际新段且不抑制后续授权段', async () => {
+  const f = fixture('implementation'); f.state.workRevision = 1; await f.start();
+  f.state.workRevision = 2; f.state.continuationReady = true;
+  await f.fire('input', { text: '我先核对本段', source: 'interactive' });
+  await f.tick(); expect(f.sendMessage).not.toHaveBeenCalled();
+  f.state.workRevision = 3; await f.tick(); expect(f.sendMessage).toHaveBeenCalledTimes(1);
+  await f.fire('session_shutdown');
+});
+
+it('输入前在途的旧 control 不消费用户优先标记', async () => {
+  const f = fixture('implementation'); f.state.workRevision = 1; await f.start();
+  const old = { ...f.state };
+  let release!: (state: typeof old) => void;
+  f.request.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+  await f.tick();
+  f.state.workRevision = 2; f.state.continuationReady = true;
+  await f.fire('input', { text: '我先查看', source: 'interactive' });
+  release(old); await f.tick(0); await f.tick();
+  expect(f.sendMessage).not.toHaveBeenCalled();
+  f.state.workRevision = 3; await f.tick(); expect(f.sendMessage).toHaveBeenCalledTimes(1);
+  await f.fire('session_shutdown');
+});
+
+it('接受新段 control 清掉旧交付与结束标志', async () => {
+  const f = fixture(); f.state.workRevision = 1; f.state.deliverySaved = true;
+  f.state.discussionEndRequested = true; await f.start();
+  expect(f.control.deliverySaved).toBe(true); expect(f.control.discussionEndConfirmed).toBe(true);
+  f.control.accept({ workRevision: 2, implementationAllowed: true });
+  expect(f.control.deliverySaved).toBe(false); expect(f.control.discussionEndConfirmed).toBe(false);
+  await f.fire('session_shutdown');
+});
+
 it('普通恢复即使收到 ready 字段也不自动发消息', async () => {
   const f = fixture('implementation'); f.state.continuationReady = true; await f.start(); await f.tick(10_000);
   expect(f.sendMessage).not.toHaveBeenCalled(); await f.fire('session_shutdown');
@@ -98,6 +147,9 @@ it('普通回合保持讨论运行，工作台请求在 Pi 空闲后只触发一
   expect(f.sendMessage).toHaveBeenCalledTimes(1);
   expect(f.shutdown).not.toHaveBeenCalled();
   f.state.deliverySaved = true;
+  await f.tick();
+  expect(f.shutdown).not.toHaveBeenCalled();
+  f.state.closeRequested = true;
   await f.tick();
   expect(f.shutdown).toHaveBeenCalledTimes(1);
   await f.fire('session_shutdown');

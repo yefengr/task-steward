@@ -44,7 +44,7 @@ test('问题前置、最新交付确认ID与失败返修跨导航和视口恢复
   await api.exited(attempt.id);
   await page.goBack();
   await page.goForward();
-  await expect(page.getByRole('button', { name: '验收通过 · v1' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '确认交付版本 · v1' })).toBeVisible();
   const delivered = await page.locator('.current-delivery').boundingBox();
   const progressed = await page.locator('.current-progress').boundingBox();
   expect(delivered!.y).toBeLessThan(progressed!.y);
@@ -88,9 +88,9 @@ test('问题前置、最新交付确认ID与失败返修跨导航和视口恢复
   await expect(page.getByRole('dialog').getByLabel('返修反馈')).toHaveValue('保留的反馈');
   await expect(dialog.locator('.pwa-confirm-actions button')).toHaveText(['返修', '返回']);
   await page.getByRole('dialog').getByRole('button', { name: '返回', exact: true }).click();
-  await page.getByRole('button', { name: '验收通过 · v1' }).click();
+  await page.getByRole('button', { name: '确认交付版本 · v1' }).click();
   const request = page.waitForRequest('**/api/v1/web/tasks/*/accept');
-  await page.getByRole('dialog').getByRole('button', { name: '验收通过', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '确认交付版本', exact: true }).click();
   expect((await request).postDataJSON()).toEqual({ deliveryId: delivery.deliveryId });
   await expect(page.getByRole('dialog')).toBeHidden();
 });

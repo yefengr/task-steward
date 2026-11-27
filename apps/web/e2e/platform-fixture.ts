@@ -55,21 +55,26 @@ function platformApi(origin: string, token: string, directory: string) {
     expect(response.status, path).toBe(200);
     return response.json() as Promise<unknown>;
   }
+  const startForeground = async () => {
+    const ownerId = randomUUID(), sessionId = randomUUID();
+    const { binding } = c.foregroundStartResponseSchema.parse(await post('/task-management/foreground/start', {
+      requestId: randomUUID(), goalId: randomUUID(), ownerId, pid: 123456, projectId, projectName, registeredPath: directory,
+      title: '前台纳管与后台接续', goal: '隔离浏览器验收', acceptance: '', notes: '', type: 'discussion',
+      locator: { path: directory, sessionId, sessionFile: join(directory, `${sessionId}.jsonl`) },
+    }));
+    return { ...binding, sessionId, ownerId };
+  };
   return {
     foreground: async (delivered = false) => {
-      const ownerId = randomUUID(), sessionId = randomUUID();
-      const { binding } = c.foregroundStartResponseSchema.parse(await post('/task-management/foreground/start', {
-        requestId: randomUUID(), goalId: randomUUID(), ownerId, pid: 123456, projectId, projectName, registeredPath: directory,
-        title: '前台纳管与后台接续', goal: '隔离浏览器验收', acceptance: '', notes: '', type: 'discussion',
-        locator: { path: directory, sessionId, sessionFile: join(directory, `${sessionId}.jsonl`) },
-      }));
+      const front = await startForeground();
       if (delivered) {
-        await post('/agent/end-discussion', { requestId: randomUUID() }, binding.attemptId, ownerId);
-        await post('/agent/deliveries', { requestId: randomUUID(), summary: '前台已交付', done: [], notCovered: [], verification: [], howTo: [], issues: [] }, binding.attemptId, ownerId);
-        await post('/agent/foreground/settle', { requestId: randomUUID() }, binding.attemptId, ownerId);
-      } else await post('/agent/foreground/interrupt', { requestId: randomUUID() }, binding.attemptId, ownerId);
-      return { ...binding, sessionId };
+        await post('/agent/end-discussion', { requestId: randomUUID() }, front.attemptId, front.ownerId);
+        await post('/agent/deliveries', { requestId: randomUUID(), summary: '前台已交付', done: [], notCovered: [], verification: [], howTo: [], issues: [] }, front.attemptId, front.ownerId);
+        await post('/agent/foreground/settle', { requestId: randomUUID() }, front.attemptId, front.ownerId);
+      } else await post('/agent/foreground/interrupt', { requestId: randomUUID() }, front.attemptId, front.ownerId);
+      return front;
     },
+    foregroundActive: startForeground,
     foregroundControl: async () => c.launcherHeartbeatResponseSchema.parse(await post('/launcher/heartbeat', {
       requestId: randomUUID(), launcherVersion: 'smoke', slots: 2, sessionControl: true, foregroundControl: true,
       projects: [{ id: projectId, name: projectName, path: directory }], attempts: [],
@@ -88,6 +93,11 @@ function platformApi(origin: string, token: string, directory: string) {
     deliver: async (id: string, summary: string) => c.agentDeliveryResponseSchema.parse(await post('/agent/deliveries', {
       requestId: randomUUID(), summary, done: ['已保存任务详情'], notCovered: [], verification: ['运行检查通过'], howTo: [], issues: [],
     }, id)),
+    settle: async (id: string) => c.okResponseSchema.parse(await post('/agent/settle', { requestId: randomUUID() }, id)),
+    reviseDelivery: async (id: string, deliveryId: string, reason: string) => c.agentDeliveryResponseSchema.parse(await post('/agent/delivery-revisions', {
+      requestId: randomUUID(), deliveryId, reason, authorizedByUser: true,
+      summary: `补充记录：${reason}`, done: [], notCovered: [], verification: [], howTo: [], issues: [],
+    }, id)),
     question: async (id: string, text: string) => c.agentCreateQuestionResponseSchema.parse(await post('/agent/questions', {
       requestId: randomUUID(), text, context: '来自讨论任务的显式问题',
     }, id)),
@@ -96,8 +106,10 @@ function platformApi(origin: string, token: string, directory: string) {
   };
 }
 
-interface Fixture { origin: string; password: string; databaseFile: string; api: ReturnType<typeof platformApi> }
-export const test = base.extend<{ platform: Fixture }>({
+export interface PlatformFixture {
+  origin: string; password: string; machineId: string; databaseFile: string; api: ReturnType<typeof platformApi>;
+}
+export const test = base.extend<{ platform: PlatformFixture }>({
   platform: async ({}, use) => {
     const directory = await mkdtemp(join(tmpdir(), 'steward-web-e2e-'));
     try {
@@ -107,7 +119,8 @@ export const test = base.extend<{ platform: Fixture }>({
       const token = `stm_${randomBytes(32).toString('base64url')}`;
       const env = { ...process.env, STEWARD_DATA_DIR: directory, STEWARD_PUBLIC_ORIGIN: origin, STEWARD_ALLOW_LOCAL_HTTP: '1',
         STEWARD_WEB_DIR: webDir, PORT: String(port) };
-      adminInput(['machine:add', machineName], token, env);
+      const machineId = /Machine registered: (\S+)/.exec(adminInput(['machine:add', machineName], token, env))?.[1];
+      if (!machineId) throw new Error('Could not read the test machine ID');
       const hash = adminInput(['hash-password'], password, env);
       const child = spawn(process.execPath, [index], { env: { ...env, STEWARD_ACCESS_PASSWORD_HASH: hash }, stdio: 'ignore' });
       let stopped = false;
@@ -117,7 +130,7 @@ export const test = base.extend<{ platform: Fixture }>({
         await waitForPlatform(origin, () => stopped);
         const api = platformApi(origin, token, directory);
         await api.register();
-        await use({ origin, password, databaseFile: databasePath(env), api });
+        await use({ origin, password, machineId, databaseFile: databasePath(env), api });
       } finally {
         if (!stopped) child.kill();
         await closed;

@@ -1,6 +1,7 @@
 import { REPLY_REMINDER_DELAY_MS, MACHINE_ONLINE_WINDOW_MS, taskStatusSchema } from '@pi-steward/contract';
 import type { Agent, Attempt, AttemptWorkspace, Delivery, Task, TaskStatus, TaskType, TaskPriority, TaskDifficulty, WaitingReason, WebMachine, WebProject, WebTaskDetailResponse } from '@pi-steward/contract';
 import { reject } from './errors.js';
+import { lifecycleView } from './lifecycle.js';
 import { gitState, projectGitSettings } from './git-lifecycle.js';
 import { sessionOperationView } from './session-control.js';
 import type { Store } from './store.js';
@@ -11,6 +12,7 @@ export interface TaskRow {
   created_by: 'user' | 'agent'; version: number; created_at: number; updated_at: number;
   base_branch: string | null; git_sync_before_start: number | null;
   origin: Task['origin'];
+  accepted_at: number | null; lifecycle_phase: NonNullable<Task['lifecycle']>['phase'] | null; lifecycle_message: string | null;
 }
 export interface AttemptRow {
   id: string; task_id: string; machine_id: string; agent: Agent; kind: Exclude<Attempt['kind'], 'resume'>; session_id: string;
@@ -19,6 +21,7 @@ export interface AttemptRow {
   tmux_session: string | null; claimed_at: number; started_at: number | null; lease_expires_at: number;
   cancel_requested: number; discussion_end_requested_at: number | null; ended_at: number | null;
   exit_code: number | null; result: Attempt['result']; workspace_path: string;
+  work_revision: number; settled_at: number | null; work_mode: Attempt['executionMode'] | null;
   confirmed_git_root: string | null;
   confirmed_workspace_path: string | null; confirmed_git_kind: AttemptWorkspace['gitKind'] | null;
   confirmed_git_branch: string | null; confirmed_session_id: string | null; confirmed_session_file: string | null;
@@ -31,6 +34,7 @@ interface ProjectRow { id: string; name: string; last_machine_id: string | null;
 interface DeliveryRow {
   id: string; taskId: string; attemptId: string; version: number; summary: string; done: string; notCovered: string;
   verification: string; howTo: string; issues: string; baseCommit: string | null; commit: string | null;
+  kind: Delivery['kind']; workRevision: number; sourceDeliveryId: string | null; revisionReason: string | null;
   reportRef: string | null; review: Delivery['review']; feedback: string | null; reviewedAt: number | null; createdAt: number;
 }
 
@@ -65,9 +69,9 @@ export function executionMachine(store: Store, taskId: string) {
 }
 export function occupiedSlots(store: Store, machineId: string, now: number) {
   return store.get<{ count: number }>(`SELECT
-    (SELECT COUNT(*) FROM attempts WHERE machine_id=? AND ended_at IS NULL AND execution_mode='background') +
+    (SELECT COUNT(*) FROM attempts WHERE machine_id=? AND ended_at IS NULL AND settled_at IS NULL AND COALESCE(work_mode,execution_mode)='background') +
     (SELECT COUNT(*) FROM session_operations o JOIN attempts a ON a.id=o.source_attempt_id
-      WHERE o.machine_id=? AND o.step='stop' AND o.deadline_at>? AND (a.ended_at IS NOT NULL OR a.execution_mode='foreground')) AS count`, machineId, machineId, now)!.count;
+      WHERE o.machine_id=? AND o.mode IN ('continue','restore','background','restart') AND o.step='stop' AND o.deadline_at>? AND (a.ended_at IS NOT NULL OR a.execution_mode='foreground')) AS count`, machineId, machineId, now)!.count;
 }
 export function activeAttempt(store: Store, taskId: string) {
   return store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? AND ended_at IS NULL', taskId);
@@ -81,7 +85,7 @@ export function isOnline(machine: MachineRow, now: number) {
 }
 function waiting(store: Store, task: TaskRow, active: AttemptRow | undefined, now: number): WaitingReason | null {
   if (task.status !== 'queued') return null;
-  if (active) return 'previous_attempt_active';
+  if (active && !(task.rework_pending && active.execution_mode === 'background' && active.settled_at !== null)) return 'previous_attempt_active';
   const machineId = executionMachine(store, task.id);
   if (!machineId) return 'machine_unassigned';
   const machine = requireMachine(store, machineId);
@@ -99,7 +103,10 @@ export function taskView(store: Store, task: TaskRow, now: number): Task {
   const wait = running && !discussionEndRequested ? replyWait(store, running) : undefined;
   return {
     id: task.id, projectId: task.project_id, title: task.title, goal: task.goal, acceptance: task.acceptance,
-    origin: task.origin, executionMode: store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? ORDER BY claimed_at DESC,rowid DESC LIMIT 1', task.id)?.execution_mode ?? null,
+    origin: task.origin, lifecycle: lifecycleView(store, task), executionMode: (() => {
+      const latest = store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? ORDER BY claimed_at DESC,rowid DESC LIMIT 1', task.id);
+      return latest ? latest.work_mode ?? latest.execution_mode : null;
+    })(),
     baseBranch: task.base_branch, git: gitState(store, task.id),
     notes: task.notes, agent: task.agent, machineId: task.machine_id, type: task.type, status: task.status,
     priority: task.priority, difficulty: task.difficulty,
@@ -112,6 +119,7 @@ export function taskView(store: Store, task: TaskRow, now: number): Task {
 export function deliveryViews(store: Store, taskId: string): Delivery[] {
   const rows = store.all<DeliveryRow>(`SELECT id, task_id taskId, attempt_id attemptId, version, summary, done,
     not_covered notCovered, verification, how_to howTo, issues, base_commit baseCommit, "commit", report_ref reportRef,
+    kind, work_revision workRevision, source_delivery_id sourceDeliveryId, revision_reason revisionReason,
     review, feedback, reviewed_at reviewedAt, created_at createdAt FROM deliveries WHERE task_id=? ORDER BY version`, taskId);
   return rows.map(({ done, notCovered, verification, howTo, issues, baseCommit, commit, reportRef, ...row }) => ({
     ...row, done: JSON.parse(done), notCovered: JSON.parse(notCovered), verification: JSON.parse(verification),
@@ -132,7 +140,8 @@ export function questionViews(store: Store, taskId: string) {
 function attemptViews(store: Store, taskId: string, now: number, includeSessionControl: boolean): Attempt[] {
   return store.all<AttemptRow & { name: string }>(`SELECT a.*, m.name FROM attempts a JOIN machines m ON m.id=a.machine_id
     WHERE a.task_id=? ORDER BY a.claimed_at, a.rowid`, taskId).map((a) => ({
-    id: a.id, taskId: a.task_id, machineId: a.machine_id, machineName: a.name, agent: a.agent, executionMode: a.execution_mode,
+    id: a.id, taskId: a.task_id, machineId: a.machine_id, machineName: a.name, agent: a.agent, executionMode: a.work_mode ?? a.execution_mode,
+    processMode: a.execution_mode, workRevision: a.work_revision, settledAt: a.settled_at,
     kind: includeSessionControl && a.resumed_from_attempt_id && a.kind !== 'rework' ? 'resume' : a.kind,
     sessionId: (a.session_locator ? (JSON.parse(a.session_locator) as { sessionId: string }).sessionId :
       a.confirmed_session_id) ?? a.session_id,

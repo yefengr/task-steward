@@ -10,17 +10,24 @@ export function DateTime({ value }: { value: number }) {
 const deliveryLists = ['done', 'notCovered', 'verification', 'howTo', 'issues'] as const;
 const deliveryRefs = ['baseCommit', 'commit', 'reportRef'] as const;
 
-function DeliveryCard({ delivery, latest }: { delivery: Delivery; latest?: boolean }) {
+function DeliveryCard({ delivery, latest, sourceVersion }: { delivery: Delivery; latest?: boolean; sourceVersion?: number }) {
   const { t } = useI18n();
   return <article className="delivery-card">
     <div className="delivery-head">
       <h3 className="user-text">v{delivery.version} · {delivery.summary}</h3>
       {latest && <span className="chip">{t.task.latest}</span>}
+      {delivery.kind === 'record' && <span className="chip">{t.task.recordDelivery}</span>}
       {delivery.review && <span className={`chip ${delivery.review === 'accepted' ? 'status-done' : 'status-review'}`}>
         {delivery.review === 'accepted' ? t.task.accepted : t.task.reworked}
       </span>}
+      {delivery.workRevision != null && <span className="muted small">{t.task.workRevision} {delivery.workRevision}</span>}
       <span className="muted small"><DateTime value={delivery.createdAt} /></span>
     </div>
+    {delivery.kind === 'record' && <div className="delivery-field">
+      <h4>{t.task.recordDelivery}</h4>
+      {sourceVersion !== undefined && <p className="muted small">{t.task.recordSource} · v{sourceVersion}</p>}
+      {delivery.revisionReason && <p className="user-text"><strong>{t.task.revisionReason} · </strong>{delivery.revisionReason}</p>}
+    </div>}
     {deliveryLists.map((key) => delivery[key].length > 0 && <div className="delivery-field" key={key}>
       <h4>{t.task[key]}</h4><ul>{delivery[key].map((item, index) => <li key={index} className="user-text">{item}</li>)}</ul>
     </div>)}
@@ -34,12 +41,14 @@ function DeliveryCard({ delivery, latest }: { delivery: Delivery; latest?: boole
 export function Deliveries({ deliveries }: { deliveries: Delivery[] }) {
   const { t } = useI18n();
   const [latest, ...older] = deliveries.toSorted((a, b) => b.version - a.version);
+  const versions = new Map(deliveries.map((delivery) => [delivery.id, delivery.version]));
+  const sourceVersion = (delivery: Delivery) => delivery.sourceDeliveryId ? versions.get(delivery.sourceDeliveryId) : undefined;
   return <section className="detail-section">
     <h2>{t.task.delivery}</h2>
-    {latest ? <DeliveryCard delivery={latest} latest /> : <p className="muted">{t.task.noDelivery}</p>}
+    {latest ? <DeliveryCard delivery={latest} latest sourceVersion={sourceVersion(latest)} /> : <p className="muted">{t.task.noDelivery}</p>}
     {older.length > 0 && <details className="fold">
       <summary className="pwa-press-row"><ChevronRight size={16} />{t.task.history} <span className="muted">{older.length}</span></summary>
-      <div className="fold-body">{older.map((delivery) => <DeliveryCard key={delivery.id} delivery={delivery} />)}</div>
+      <div className="fold-body">{older.map((delivery) => <DeliveryCard key={delivery.id} delivery={delivery} sourceVersion={sourceVersion(delivery)} />)}</div>
     </details>}
   </section>;
 }
@@ -73,7 +82,10 @@ function AttemptRecord({ attempt }: { attempt: Attempt }) {
     <dl className="kv">
       <dt>{t.task.result}</dt><dd>{result}{attempt.needsVerification && ` · ${t.task.needsVerification}`}</dd>
       <dt>{t.form.agent}</dt><dd>{attempt.agent === 'pi' ? 'Pi' : t.form.claude}</dd>
-      <dt>{t.execution.mode}</dt><dd>{t.execution.modes[attempt.executionMode]}</dd>
+      <dt>{t.task.workMode}</dt><dd>{t.execution.modes[attempt.executionMode]}</dd>
+      <dt>{t.task.processMode}</dt><dd>{t.execution.modes[attempt.processMode ?? attempt.executionMode]}</dd>
+      <dt>{t.task.workRevision}</dt><dd>{attempt.workRevision ?? 0}</dd>
+      {attempt.settledAt != null && <><dt>{t.task.settledAt}</dt><dd><DateTime value={attempt.settledAt} /></dd></>}
       <dt>{t.task.attempt}</dt><dd><code>{attempt.id}</code></dd>
       <dt>{t.task.session}</dt><dd><code>{attempt.sessionId}</code></dd>
       <dt>{t.task.tmux}</dt><dd><code>{attempt.tmuxSession ?? t.common.unknown}</code></dd>

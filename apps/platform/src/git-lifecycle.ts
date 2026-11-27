@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { gitCommitSchema } from '@pi-steward/contract';
 import type { AgentPrepareGitRequest, AttemptWorkspace, LauncherGitOperation, LauncherGitReport, ProjectGitSettings, TaskGit } from '@pi-steward/contract';
 import { reject } from './errors.js';
+import { requestFinalization } from './session-control.js';
+import { attemptLocator, confirmedLocator, isContinuedWork, sameLocator } from './session-locator.js';
 import type { Store } from './store.js';
 import { requireMachine, requireProject, requireTask, taskView } from './views.js';
 import type { AttemptRow } from './views.js';
@@ -71,8 +73,8 @@ export function prepareGit(store: Store, attempt: AttemptRow, input: AgentPrepar
 export function confirmGitWorkspace(store: Store, attempt: AttemptRow, workspace: AttemptWorkspace) {
   const git = gitState(store, attempt.task_id);
   if (!git) return;
-  if (attempt.kind === 'rework' && (workspace.path !== attempt.confirmed_workspace_path ||
-      workspace.sessionId !== attempt.confirmed_session_id || workspace.sessionFile !== attempt.confirmed_session_file)) {
+  if ((attempt.kind === 'rework' || isContinuedWork(store, attempt)) &&
+      !sameLocator(confirmedLocator(attempt) ?? attemptLocator(attempt), workspace)) {
     reject('conflict', 'Git rework must retain the original confirmed session and workspace');
   }
   if (git.machineId !== attempt.machine_id || workspace.gitKind !== 'linked' || workspace.gitBranch !== git.taskBranch ||
@@ -102,8 +104,9 @@ export function gitLocked(store: Store, taskId: string) {
   const git = gitState(store, taskId);
   return !!git && ['awaiting_merge', 'merge_blocked', 'cleanup_pending', 'cleanup_blocked', 'complete'].includes(git.phase);
 }
-function idle(store: Store, taskId: string) {
-  return !store.get('SELECT 1 FROM attempts WHERE task_id=? AND ended_at IS NULL', taskId) &&
+function idle(store: Store, taskId: string, merging = false) {
+  return !store.get(`SELECT 1 FROM attempts WHERE task_id=? AND ended_at IS NULL
+    AND (?=0 OR execution_mode='foreground' OR settled_at IS NULL)`, taskId, Number(merging)) &&
     !store.get("SELECT 1 FROM session_operations WHERE task_id=? AND step IN ('stop','launch','cleanup')", taskId);
 }
 export function acceptGit(store: Store, taskId: string, deliveryId: string) {
@@ -113,7 +116,8 @@ export function acceptGit(store: Store, taskId: string, deliveryId: string) {
   const delivery = store.get<{ commit: string; attempt_id: string }>('SELECT "commit", attempt_id FROM deliveries WHERE id=? AND task_id=?', deliveryId, taskId)!;
   if (!git.worktreePath || !['ready', 'needs_rework'].includes(git.phase)) reject('conflict', 'Git task is not ready for acceptance');
   const id = randomUUID();
-  const operation: LauncherGitOperation = { id, taskId, projectId: task.project_id, deliveryId, baseBranch: git.baseBranch,
+  const operation: LauncherGitOperation = { id, taskId, projectId: task.project_id, deliveryId,
+    sourceAttemptId: delivery.attempt_id, baseBranch: git.baseBranch,
     baseCommit: git.baseCommit, taskBranch: git.taskBranch, repositoryPath: git.repositoryPath, worktreePath: git.worktreePath,
     approvedCommit: delivery.commit, mergedCommit: null, phase: 'merge' };
   const source = store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? AND id=(SELECT attempt_id FROM deliveries WHERE id=?)', taskId, deliveryId);
@@ -122,12 +126,13 @@ export function acceptGit(store: Store, taskId: string, deliveryId: string) {
   }
   store.run('INSERT INTO git_operations VALUES (?,?,?,?,?)', id, taskId, git.machineId, JSON.stringify(operation), 'merge');
   save(store, taskId, { ...git, operationId: id, deliveryId, approvedCommit: delivery.commit, mergedCommit: null, phase: 'awaiting_merge', message: null });
+  store.run("UPDATE tasks SET lifecycle_phase='merging',lifecycle_message=NULL WHERE id=?", taskId);
   return true;
 }
 export function gitDirectives(store: Store, machineId: string): LauncherGitOperation[] {
   return store.all<{ authorization: string; phase: 'merge' | 'cleanup'; task_id: string; id: string }>("SELECT * FROM git_operations WHERE machine_id=? AND phase IN ('merge','cleanup')", machineId).flatMap((row) => {
     const git = gitState(store, row.task_id);
-    if (!git || git.operationId !== row.id || !idle(store, row.task_id) ||
+    if (!git || git.operationId !== row.id || !idle(store, row.task_id, row.phase === 'merge') ||
         (row.phase === 'merge' ? git.phase !== 'awaiting_merge' : git.phase !== 'cleanup_pending')) return [];
     const operation = JSON.parse(row.authorization) as LauncherGitOperation;
     if (operation.foregroundOwner && !requireMachine(store, machineId).foreground_control) return [];
@@ -145,22 +150,31 @@ export function reportGit(store: Store, machineId: string, id: string, input: La
     if (input.mergedCommit !== git.approvedCommit || (input.outcome === 'merged' ? phase !== 'merge' : phase !== 'cleanup' || git.mergedCommit !== git.approvedCommit)) reject('conflict', 'Successful report must match the exact accepted commit and stage');
     next = { ...next, mergedCommit: input.mergedCommit, phase: input.outcome === 'merged' ? 'cleanup_pending' : 'complete' };
     phase = input.outcome === 'merged' ? 'cleanup' : 'complete';
-    if (phase === 'complete') store.run("UPDATE tasks SET status='done', version=version+1, updated_at=? WHERE id=?", now, row.task_id);
+    if (phase === 'complete') store.run("UPDATE tasks SET status='done',lifecycle_phase='complete',lifecycle_message=NULL, version=version+1, updated_at=? WHERE id=?", now, row.task_id);
+    else store.run("UPDATE tasks SET accepted_at=?,lifecycle_phase='cleanup_pending' WHERE id=?", now, row.task_id);
   } else if (input.outcome === 'needs_rework') {
     if (phase !== 'merge') reject('conflict', 'Merged work can only retry cleanup');
     next.phase = 'needs_rework'; phase = 'stopped';
+    store.run('UPDATE tasks SET lifecycle_phase=NULL,lifecycle_message=NULL WHERE id=? AND accepted_at IS NULL', row.task_id);
     store.run("UPDATE tasks SET status='queued', machine_id=?, rework_pending=1, version=version+1, updated_at=? WHERE id=?", machineId, now, row.task_id);
   } else {
     next.phase = phase === 'merge' ? 'merge_blocked' : 'cleanup_blocked'; phase = 'stopped';
   }
   store.run('UPDATE git_operations SET phase=? WHERE id=?', phase, id);
   save(store, row.task_id, next);
+  if (input.outcome === 'merged') requestFinalization(store, row.task_id, now);
+  else if (input.outcome === 'blocked') store.run('UPDATE tasks SET lifecycle_phase=?,lifecycle_message=? WHERE id=?', row.phase === 'merge' ? 'merge_blocked' : 'cleanup_blocked', next.message, row.task_id);
   store.event(row.task_id, 'launcher', null, 'git_report', { operationId: id, ...input }, now);
   return { ok: true } as const;
 }
 export function retryGit(store: Store, taskId: string, now: number) {
   const git = gitState(store, taskId);
-  if (!git || !git.operationId || !['merge_blocked', 'cleanup_blocked'].includes(git.phase) || !idle(store, taskId)) reject('conflict', 'Only an idle blocked Git operation can retry');
+  const task = requireTask(store, taskId);
+  if (task.accepted_at !== null && task.lifecycle_phase === 'cleanup_blocked' && (!git || store.get('SELECT 1 FROM attempts WHERE task_id=? AND ended_at IS NULL', taskId))) {
+    requestFinalization(store, taskId, now);
+    return { task: taskView(store, requireTask(store, taskId), now) };
+  }
+  if (!git || !git.operationId || !['merge_blocked', 'cleanup_blocked'].includes(git.phase) || !idle(store, taskId, !git.mergedCommit)) reject('conflict', 'Only an idle blocked Git operation can retry');
   const previous = store.get<{ authorization: string; phase: string }>('SELECT * FROM git_operations WHERE id=? AND task_id=?', git.operationId, taskId);
   if (!previous || previous.phase !== 'stopped') reject('conflict', 'Git operation changed');
   const id = randomUUID();
@@ -168,6 +182,7 @@ export function retryGit(store: Store, taskId: string, now: number) {
   const operation = { ...JSON.parse(previous.authorization) as LauncherGitOperation, id, phase, mergedCommit: git.mergedCommit };
   store.run('INSERT INTO git_operations VALUES (?,?,?,?,?)', id, taskId, git.machineId, JSON.stringify(operation), phase);
   save(store, taskId, { ...git, operationId: id, phase: phase === 'merge' ? 'awaiting_merge' : 'cleanup_pending', message: null });
+  store.run('UPDATE tasks SET lifecycle_phase=?,lifecycle_message=NULL WHERE id=?', phase === 'merge' ? 'merging' : 'cleanup_pending', taskId);
   store.event(taskId, 'user', null, 'git_retry', { operationId: id }, now);
   return { task: taskView(store, requireTask(store, taskId), now) };
 }

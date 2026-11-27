@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { TaskStatus, WebCreateTaskRequest, WebUpdateTaskRequest } from '@pi-steward/contract';
 import { reject } from './errors.js';
 import { acceptGit, gitLocked, gitState, projectGitSettings } from './git-lifecycle.js';
-import { requireNoPendingSessionOperation } from './session-control.js';
+import { requestFinalization, requireNoPendingSessionOperation } from './session-control.js';
 import type { Store } from './store.js';
 import { activeAttempt, executionMachine, requireMachine, requireProject, requireTask, taskView } from './views.js';
 
@@ -83,6 +83,7 @@ export function taskAction(store: Store, id: string, action: TaskAction, now: nu
   review?: { deliveryId: string; feedback?: string }) {
   const task = requireTask(store, id);
   requireNoPendingSessionOperation(store, id, now, action === 'cancel');
+  if (task.accepted_at !== null || (task.lifecycle_phase === 'paused' && action !== 'cancel') || (task.lifecycle_phase === 'pausing' && action !== 'cancel')) reject('conflict', 'Task lifecycle does not allow this action');
   if (gitLocked(store, id)) reject('conflict', 'Accepted Git integration must finish or retry before task actions');
   if ((action === 'accept' || action === 'rework') && !review) reject('invalid_request', 'An exact delivery is required');
   if (!allowed[action].includes(task.status) || (action === 'unschedule' && task.rework_pending)) {
@@ -93,16 +94,21 @@ export function taskAction(store: Store, id: string, action: TaskAction, now: nu
     if (action !== 'rework' && !executionMachine(store, id)) reject('machine_required', 'Select an execution machine first');
   }
   if (review) {
-    const latest = store.get<{ id: string; review: string | null }>('SELECT id, review FROM deliveries WHERE task_id=? ORDER BY version DESC LIMIT 1', id);
+    const latest = store.get<{ id: string; review: string | null; attempt_id: string }>('SELECT id, review, attempt_id FROM deliveries WHERE task_id=? ORDER BY version DESC LIMIT 1', id);
+
     if (latest?.id !== review.deliveryId || latest.review !== null) reject('conflict', 'Only the latest unreviewed delivery can be reviewed');
     store.run('UPDATE deliveries SET review=?, feedback=?, reviewed_at=? WHERE id=?',
       action === 'accept' ? 'accepted' : 'rework', review.feedback ?? null, now, latest.id);
   }
   if (action === 'cancel') store.run('UPDATE attempts SET cancel_requested=1 WHERE task_id=? AND ended_at IS NULL', id);
   const trackedAcceptance = action === 'accept' && review && acceptGit(store, id, review.deliveryId);
-  const to = trackedAcceptance ? 'review' : nextStatus[action];
+  const to = action === 'accept' ? 'review' : nextStatus[action];
   store.run('UPDATE tasks SET status=?, rework_pending=?, version=version+1, updated_at=? WHERE id=?',
     to, Number(action === 'rework'), now, id);
+  if (action === 'accept' && !trackedAcceptance) {
+    store.run("UPDATE tasks SET accepted_at=?,lifecycle_phase='cleanup_pending' WHERE id=?", now, id);
+    requestFinalization(store, id, now);
+  }
   store.event(id, 'user', null, action, { from: task.status, to, ...(review ?? {}) }, now);
   return { task: taskView(store, requireTask(store, id), now) };
 }

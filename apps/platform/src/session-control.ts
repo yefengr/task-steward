@@ -5,7 +5,7 @@ import type { LauncherSessionDirective, LauncherSessionReport, PiSessionLocator,
 import { reject } from './errors.js';
 import { gitLocked, gitState } from './git-lifecycle.js';
 import type { Store } from './store.js';
-import { attemptLocator, confirmedLocator, sameLocator, sessionInUse } from './session-locator.js';
+import { attemptLocator, confirmedLocator, isContinuedWork, sameLocator, sessionInUse } from './session-locator.js';
 import { activeAttempt, isOnline, occupiedSlots, requireMachine, requireTask } from './views.js';
 import type { AttemptRow } from './views.js';
 
@@ -49,7 +49,7 @@ export function requireNoPendingSessionOperation(store: Store, taskId: string, n
 }
 
 export function sessionOperationView(store: Store, task: Pick<Task, 'id' | 'status'>, attempt: { id: string } | undefined, now: number): WebSessionOperation | undefined {
-  if (!attempt || !['running', 'interrupted', 'queued'].includes(task.status)) return undefined;
+  if (!attempt) return undefined;
   const operation = store.get<OperationRow>(`SELECT * FROM session_operations WHERE task_id=?
     AND COALESCE(replacement_id, source_attempt_id)=? ORDER BY rowid DESC LIMIT 1`, task.id, attempt.id);
   if (!operation || (operation.step === 'succeeded' && now - operation.loaded_at! > READY_NOTICE_MS)) return undefined;
@@ -63,6 +63,8 @@ export function sessionOperationView(store: Store, task: Pick<Task, 'id' | 'stat
 
 function failOperation(store: Store, operation: OperationRow, failure: SessionOperationFailure, now: number) {
   store.run("UPDATE session_operations SET step='failed', failure=? WHERE id=?", failure, operation.id);
+  if (operation.mode === 'finalize' || operation.mode === 'pause') store.run('UPDATE tasks SET lifecycle_phase=?,lifecycle_message=? WHERE id=?',
+    operation.mode === 'finalize' ? 'cleanup_blocked' : 'pausing', failure, operation.task_id);
   store.event(operation.task_id, 'launcher', operation.replacement_id ?? operation.source_attempt_id,
     'session_operation_failed', { operationId: operation.id, mode: operation.mode, failure }, now);
 }
@@ -76,6 +78,8 @@ export function requestSessionOperation(store: Store, taskId: string, input: Web
     return ok;
   }
   const task = requireTask(store, taskId);
+  if (input.mode === 'pause' || input.mode === 'continue' || input.mode === 'finalize') return requestLifecycleOperation(store, taskId, input, now);
+  if (task.lifecycle_phase === 'paused' || task.accepted_at !== null) reject('conflict', 'Paused or accepted tasks cannot restart');
   if (gitLocked(store, taskId)) reject('conflict', 'Accepted Git integration cannot restore or restart its workspace');
   requireNoPendingSessionOperation(store, taskId, now);
   const source = latestAttempt(store, taskId);
@@ -109,6 +113,51 @@ export function requestSessionOperation(store: Store, taskId: string, input: Web
   return ok;
 }
 
+export function finishFinalization(store: Store, taskId: string, now: number) {
+  const git = gitState(store, taskId);
+  store.run('UPDATE tasks SET status=?,lifecycle_phase=?,lifecycle_message=NULL,version=version+1,updated_at=? WHERE id=?',
+    git ? 'review' : 'done', git ? 'cleanup_pending' : 'complete', now, taskId);
+}
+
+function requestLifecycleOperation(store: Store, taskId: string, input: WebSessionOperationRequest, now: number) {
+  const task = requireTask(store, taskId);
+  requireNoPendingSessionOperation(store, taskId, now);
+  const source = latestAttempt(store, taskId);
+  if (!source || source.id !== input.attemptId || source.cancel_requested || task.status === 'cancelled') reject('conflict', 'Expected source is no longer current');
+  if (input.mode === 'pause' && (task.status !== 'running' || source.ended_at !== null || task.accepted_at !== null)) reject('conflict', 'Only running work can pause');
+  if (input.mode === 'continue' && (task.lifecycle_phase !== 'paused' || source.ended_at === null || task.accepted_at !== null)) reject('conflict', 'Only paused work can continue');
+  if (input.mode === 'finalize' && task.accepted_at === null) reject('conflict', 'Only accepted work can finalize');
+  const machine = requireMachine(store, source.machine_id);
+  if (!isOnline(machine, now)) reject('session_machine_offline', 'The original execution machine is offline');
+  if (!machine.session_control || (source.execution_mode === 'foreground' && !machine.foreground_control)) reject('session_unsupported', 'The original launcher lacks process control');
+  if (input.mode === 'continue' && occupiedSlots(store, machine.id, now) >= machine.slots) reject('session_slots_full', 'The original machine has no free execution slots');
+  const locator = attemptLocator(source);
+  if (!locator) reject('session_record_missing', 'The execution has no saved Pi session locator');
+  if (sessionInUse(store, machine.id, locator, taskId)) reject('session_in_use', 'The session is in use');
+  const previous = store.get<OperationRow>("SELECT * FROM session_operations WHERE task_id=? AND step='stop'", taskId);
+  if (previous) failOperation(store, previous, 'session_timeout', now);
+  store.run("INSERT INTO session_operations (id,task_id,machine_id,source_attempt_id,mode,locator,step,deadline_at) VALUES (?,?,?,?,?,?,'stop',?)",
+    input.requestId, taskId, machine.id, source.id, input.mode, JSON.stringify(locator), now + STOP_WINDOW_MS);
+  store.run('UPDATE tasks SET lifecycle_phase=?,lifecycle_message=NULL,version=version+1,updated_at=? WHERE id=?',
+    input.mode === 'pause' ? 'pausing' : input.mode === 'finalize' ? 'cleanup_pending' : 'paused', now, taskId);
+  store.event(taskId, 'user', source.id, 'session_operation_requested', { operationId: input.requestId, mode: input.mode }, now);
+  return ok;
+}
+
+export function requestFinalization(store: Store, taskId: string, now: number) {
+  const source = latestAttempt(store, taskId);
+  // 普通 Pi 不自动关闭；已解绑的无 Git 任务可以直接完成。
+  if (!source || source.execution_mode === 'foreground' || source.ended_at !== null) {
+    finishFinalization(store, taskId, now);
+    return;
+  }
+  try {
+    requestLifecycleOperation(store, taskId, { requestId: randomUUID(), attemptId: source.id, mode: 'finalize' }, now);
+  } catch (error) {
+    store.run("UPDATE tasks SET lifecycle_phase='cleanup_blocked',lifecycle_message=? WHERE id=?", error instanceof Error ? error.message : 'Finalization failed', taskId);
+  }
+}
+
 export function expireSessionPermissions(store: Store, machineId: string, now: number) {
   const expiredStops = store.all<OperationRow>("SELECT * FROM session_operations WHERE machine_id=? AND step='stop' AND deadline_at<=?", machineId, now);
   for (const operation of expiredStops) failOperation(store, operation, 'session_timeout', now);
@@ -121,7 +170,7 @@ export function sessionDirectives(store: Store, machineId: string, now: number):
   const directives: LauncherSessionDirective[] = [];
   for (const operation of rows) {
     const base = { id: operation.id, attemptId: operation.source_attempt_id, mode: operation.mode,
-      ...(operation.mode === 'background' ? { foregroundOwner: { goalId: operation.goal_id!, pid: operation.owner_pid! },
+      ...(operation.goal_id && operation.owner_pid ? { foregroundOwner: { goalId: operation.goal_id!, pid: operation.owner_pid! },
         ...(operation.confirmed_git_kind ? { foregroundGit: { kind: operation.confirmed_git_kind, branch: operation.confirmed_git_branch } } : {}) } : {}) };
     const remaining = operation.deadline_at - now;
     if (operation.step === 'cleanup' || (operation.step === 'launch' && remaining <= 0)) {
@@ -142,6 +191,7 @@ export function launchPending(store: Store, attemptId: string) {
 }
 
 function beginReplacement(store: Store, operation: OperationRow, now: number) {
+  if (operation.mode === 'continue' && requireTask(store, operation.task_id).lifecycle_phase !== 'paused') reject('conflict', 'Only paused tasks can continue');
   const source = store.get<AttemptRow>('SELECT * FROM attempts WHERE id=?', operation.source_attempt_id)!;
   const rework = operation.mode === 'background' && isForegroundRework(store, operation.task_id, source.id);
   if (operation.mode === 'background' && (source.execution_mode !== 'foreground' || source.cancel_requested ||
@@ -171,7 +221,7 @@ function beginReplacement(store: Store, operation: OperationRow, now: number) {
   if (inheritWorkspace && source.confirmed_git_root) {
     store.run('UPDATE attempts SET confirmed_git_root=? WHERE id=?', source.confirmed_git_root, replacementId);
   }
-  store.run("UPDATE tasks SET status='running', rework_pending=0, version=version+1, updated_at=? WHERE id=?", now, operation.task_id);
+  store.run("UPDATE tasks SET status='running', lifecycle_phase=NULL,lifecycle_message=NULL,rework_pending=0, version=version+1, updated_at=? WHERE id=?", now, operation.task_id);
   store.run("UPDATE session_operations SET step='launch', replacement_id=?, deadline_at=? WHERE id=?",
     replacementId, now + LAUNCH_WINDOW_MS, operation.id);
   store.event(operation.task_id, 'launcher', replacementId, 'session_operation_stopped',
@@ -191,8 +241,18 @@ export function reportSessionOperation(store: Store, machineId: string, id: stri
   if (operation.machine_id !== machineId) reject('forbidden', 'Session operation belongs to a different machine');
   const expired = operation.deadline_at <= now;
   const step = operation.step === 'launch' && expired ? 'cleanup' : operation.step;
+  // exited 与专用停止回报可交错；已确认成功的停止回执只读重放，不重复推进清理。
+  if (step === 'succeeded' && ['pause', 'finalize'].includes(operation.mode) && input.step === 'stop' && input.result === 'stopped') return ok;
   if (input.step !== step || (step === 'stop' && expired)) reject('conflict', 'Session operation phase expired or changed');
-  if (input.result === 'stopped') beginReplacement(store, operation, now);
+  if (input.result === 'stopped' && (operation.mode === 'pause' || operation.mode === 'finalize')) {
+    const task = requireTask(store, operation.task_id);
+    if (operation.mode === 'pause' && task.accepted_at !== null) reject('conflict', 'Accepted tasks cannot pause');
+    store.run("UPDATE attempts SET ended_at=COALESCE(ended_at,?),result=COALESCE(result,'interrupted') WHERE id=?", now, operation.source_attempt_id);
+    store.run("UPDATE session_operations SET step='succeeded',loaded_at=? WHERE id=?", now, operation.id);
+    if (operation.mode === 'pause') store.run("UPDATE tasks SET status='interrupted',lifecycle_phase='paused',lifecycle_message=NULL,version=version+1,updated_at=? WHERE id=? AND status<>'cancelled'", now, task.id);
+    else finishFinalization(store, task.id, now);
+    store.event(task.id, 'launcher', operation.source_attempt_id, 'session_operation_succeeded', { operationId: id, mode: operation.mode }, now);
+  } else if (input.result === 'stopped') beginReplacement(store, operation, now);
   else if (step === 'stop') failOperation(store, operation, input.failure, now);
   else endReplacement(store, operation, input.failure, now);
   return ok;
@@ -221,6 +281,7 @@ export function replacementExited(store: Store, attemptId: string, now: number) 
 }
 
 export function saveAgentSession(store: Store, attempt: AttemptRow, locator: PiSessionLocator, now: number) {
+  if (isContinuedWork(store, attempt) && !sameLocator(attemptLocator(attempt), locator)) reject('conflict', 'Continued work must retain its original session locator');
   if (sessionInUse(store, attempt.machine_id, locator, attempt.task_id)) reject('session_in_use', 'The Pi session belongs to another active task or handover');
   const operation = operationForReplacement(store, attempt.id);
   if (operation) {

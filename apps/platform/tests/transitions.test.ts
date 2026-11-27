@@ -50,6 +50,7 @@ it('返修优先、复用 Pi 会话、交付仅一次并允许验收与退出交
   expect((await x.agent(a.id, '/session', request({ locator: {
     path: project.path, sessionId: a.sessionId, sessionFile: '/sessions/first.jsonl',
   } }))).status).toBe(200);
+  expect((await x.agent(a.id, '/workspace', request({ workspace: { path: project.path, sessionId: a.sessionId, sessionFile: '/sessions/first.jsonl', gitKind: 'non_git', gitBranch: null } }))).status).toBe(200);
   const report = request(delivery);
   const d1 = c.agentDeliveryResponseSchema.parse(await (await x.agent(a.id, '/deliveries', report)).json());
   expect(d1.version).toBe(1);
@@ -63,7 +64,7 @@ it('返修优先、复用 Pi 会话、交付仅一次并允许验收与退出交
   expect(c.launcherClaimResponseSchema.parse(await (await x.claim()).json())).toEqual({ attempt: null });
   const exit = request({ exitCode: null, endedAt: x.now() });
   expect((await x.exit(a.id, exit)).status).toBe(200);
-  expect(await (await x.agent(a.id, '/deliveries', report)).json()).toEqual(d1);
+  await errorCode(await x.agent(a.id, '/deliveries', report), 409, 'attempt_ended');
   await errorCode(await x.agent(a.id, '/progress', request({ text: '已退出' })), 409, 'attempt_ended');
   const b = await x.claimed();
   expect(b).toMatchObject({ taskId: job.id, sessionId: a.sessionId, restoreSession: true, kind: 'rework' });
@@ -97,9 +98,9 @@ it.each(['running', 'review', 'queued'] as const)('取消 %s 时保留任务状�
     if (state === 'queued') await x.action(task.id, 'rework', { deliveryId: d.deliveryId, feedback: '返修' });
   }
   expect((await x.action(task.id, 'cancel')).status).toBe(200);
-  expect(await (await x.agent(a.id, '/progress', progress)).json()).toEqual({ ok: true });
+  await errorCode(await x.agent(a.id, '/progress', progress), 409, 'attempt_ended');
   await errorCode(await x.agent(a.id, '/decisions', request({ text: '新决定', confirmedByUser: false })), 409, 'attempt_ended');
-  expect(await (await x.heartbeat()).json()).toEqual({ directives: [{ attemptId: a.id, tmuxSession: `steward-${a.id}`, action: 'cancel' }] });
+  expect(await (await x.heartbeat()).json()).toEqual({ directives: [{ attemptId: a.id, tmuxSession: `steward-${a.id}`, action: 'cancel', occupiesSlot: true, workSettled: false }] });
   expect((await x.exit(a.id)).status).toBe(200);
   const end = await x.detail(task.id);
   expect(end.task.status).toBe('cancelled');

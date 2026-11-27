@@ -50,7 +50,7 @@ async function editWithConflict(page: Page, origin: string, taskPath: string) {
 }
 
 async function confirm(page: Page, action: string, feedback?: string) {
-  const name = action === '验收通过' ? /^验收通过 · v\d+$/ : action;
+  const name = action === '确认交付版本' ? /^确认交付版本 · v\d+$/ : action;
   await page.getByRole('button', { name, exact: true }).click();
   const dialog = page.getByRole('dialog');
   if (feedback) await dialog.getByLabel('返修反馈').fill(feedback);
@@ -280,8 +280,11 @@ test('桌面新建、编辑、安排、返修和验收，移动端登录后保�
   await expect(page.getByText('正在检查详情与状态更新')).toBeVisible({ timeout: 13_000 });
   await api.deliver(first.id, '已完成任务详情检查');
   await reload(page);
+  await expect(page.getByRole('button', { name: '返修', exact: true })).toBeDisabled();
+  await api.settle(first.id);
+  await reload(page);
   await confirm(page, '返修', '请补充刷新深链接的验证');
-  await expect(page.getByText('上次执行仍在收尾')).toBeVisible();
+  await expect(page.getByText('等待启动器领取', { exact: true })).toBeVisible();
   await api.exited(first.id);
   const second = await api.claim();
   if (!second) throw new Error('No rework attempt claimed');
@@ -291,7 +294,7 @@ test('桌面新建、编辑、安排、返修和验收，移动端登录后保�
   await api.exited(second.id);
   await reload(page);
   await page.screenshot({ path: artifact('steward-desktop.png'), fullPage: true });
-  await confirm(page, '验收通过');
+  await confirm(page, '确认交付版本');
   await expect(page.locator('.status-done').getByText('已完成', { exact: true })).toBeVisible();
   const logoutPath = '**/api/v1/web/auth/logout';
   await page.route(logoutPath, (route) => route.abort());

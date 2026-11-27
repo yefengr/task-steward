@@ -13,6 +13,8 @@ const execution = z.strictObject({
   startedAt: timestampSchema.optional(),
   pid: z.int().min(2).max(0x7fffffff).optional(),
   sessionOperationId: uuidSchema.optional(),
+  occupiesSlot: z.boolean().optional(),
+  workSettled: z.boolean().optional(), identityVerified: z.boolean().optional(),
 }).refine(({ id, target, phase, claim, startedAt }) => target === `steward-${id}` &&
   (!claim || claim.id === id) &&
   (phase !== 'prepared' || !!claim) && (phase !== 'launching' || startedAt !== undefined));

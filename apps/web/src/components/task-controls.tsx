@@ -11,10 +11,10 @@ import { api } from '../lib/api';
 import type { TaskAction } from '../lib/api';
 import { isGitOperationActive, isGitRetryBlocked, isIntegrationPhase } from '../lib/git';
 import { useI18n } from '../lib/i18n';
-import { ErrorNotice } from './common';
+import { ErrorNotice, taskAccepted } from './common';
 
 type Confirmation = { action: 'cancel' } | { action: 'accept' | 'rework'; delivery: Delivery } |
-  { action: 'restart' | 'restore' | 'background'; request: WebSessionOperationRequest; machineName: string };
+  { action: 'restart' | 'restore' | 'background' | 'pause' | 'continue'; request: WebSessionOperationRequest; machineName: string };
 const primaryActions: Partial<Record<Task['status'], TaskAction>> = {
   unscheduled: 'schedule', queued: 'unschedule', interrupted: 'reschedule',
 };
@@ -37,29 +37,45 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
   const [ending, setEnding] = useTaskViewState(`ending:${task.id}`, false);
   const [endRequestedFor, setEndRequestedFor] = useTaskViewState<string | undefined>(`ended:${task.id}`, undefined);
   const [retryingGit, setRetryingGit] = useTaskViewState(`retry-git:${task.id}`, false);
+  const [recordGuide, setRecordGuide] = useState(false);
   const activeAttemptId = latestAttempt?.endedAt === null ? latestAttempt.id : undefined;
   const endRequested = activeAttemptId !== undefined && endRequestedFor === activeAttemptId;
   const closed = task.status === 'done' || task.status === 'cancelled';
-  const foreground = latestAttempt?.executionMode === 'foreground';
-  const primary = (task.reworkPending && task.status === 'queued') || (foreground && task.status === 'interrupted')
-    ? undefined : primaryActions[task.status];
+  const accepted = taskAccepted(task);
+  const phase = task.lifecycle?.phase;
+  const paused = phase === 'paused';
+  const pausing = phase === 'pausing';
+  const cleanupBlocked = phase === 'cleanup_blocked';
+  // executionMode 是当前工作段方式；进程归属必须看 processMode，旧数据回退。
+  const processMode = latestAttempt?.processMode ?? latestAttempt?.executionMode;
+  const foreground = processMode === 'foreground';
+  const primary = closed || accepted || paused || pausing || (task.reworkPending && task.status === 'queued') ||
+    (foreground && task.status === 'interrupted') ? undefined : primaryActions[task.status];
   const canEndDiscussion = task.type === 'discussion' && task.status === 'running' && Boolean(activeAttemptId)
-    && !task.discussionEndRequested && !endRequested;
+    && !task.discussionEndRequested && !endRequested && !paused && !pausing && !accepted;
   const pending = sessionOperation?.status === 'pending';
   const git = task.git;
   const gitActive = isGitOperationActive(git);
   const acceptedIntegration = Boolean(git && isIntegrationPhase(git.phase));
-  const retryBlocked = isGitRetryBlocked(git);
-  const sessionAction = task.agent === 'pi' && latestAttempt?.agent === 'pi' && !latestAttempt.cancelRequested && !gitActive
+  const retryBlocked = isGitRetryBlocked(git) || cleanupBlocked;
+  const deliverySettled = latestAttempt?.settledAt != null || phase === 'settled';
+  const awaitingSettle = task.status === 'review' && latestAttempt?.endedAt === null && latestAttempt?.settledAt == null;
+  const canPause = !closed && !accepted && !pending && task.agent === 'pi' && latestAttempt?.agent === 'pi' &&
+    latestAttempt.endedAt === null && !latestAttempt.cancelRequested && task.status === 'running' && !gitActive &&
+    !endRequested && !task.discussionEndRequested && phase !== 'merging' && phase !== 'cleanup_pending' &&
+    phase !== 'cleanup_blocked' && phase !== 'complete';
+  const canContinue = !closed && !accepted && paused && !pending && task.agent === 'pi' && latestAttempt?.agent === 'pi';
+  const sessionAction = task.agent === 'pi' && latestAttempt?.agent === 'pi' && !latestAttempt.cancelRequested && !gitActive &&
+    !accepted && !paused && !pausing
     ? foreground && (task.status === 'running' || task.status === 'interrupted' || (task.status === 'queued' && task.reworkPending)) && !task.discussionEndRequested ? 'background'
       : task.status === 'interrupted' && latestAttempt.endedAt !== null ? 'restore'
       : task.status === 'running' && latestAttempt.endedAt === null && latestAttempt.startedAt !== null &&
         !task.discussionEndRequested && !endRequested ? 'restart' : undefined
     : undefined;
-  function confirmSessionAction() {
-    if (!latestAttempt || !sessionAction || pending) return;
-    setConfirmation({ action: sessionAction, machineName: latestAttempt.machineName,
-      request: { requestId: crypto.randomUUID(), attemptId: latestAttempt.id, mode: sessionAction } });
+  function confirmSessionAction(action: 'restart' | 'restore' | 'background' | 'pause' | 'continue') {
+    if (!latestAttempt || pending) return;
+    setConfirmation({ action, machineName: latestAttempt.machineName,
+      request: { requestId: crypto.randomUUID(), attemptId: latestAttempt.id, mode: action } });
   }
   async function execute(action: TaskAction) {
     setBusy(true);
@@ -82,38 +98,53 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
     setError(undefined);
     try {
       await api.retryGit(task.id);
-      // 成功后重试按钮会被集成状态替换，焦点交给仍存在的集成标题。
-      document.querySelector<HTMLElement>('.git-section h2')?.focus();
+      // 成功后重试按钮会被集成状态替换，焦点交给仍存在的集成标题或操作区。
+      (document.querySelector<HTMLElement>('.git-section h2') ?? document.querySelector<HTMLElement>('.action-bar') ??
+        document.querySelector<HTMLElement>('.back-link'))?.focus();
     } catch (error) { setError(error); }
     finally { setRetryingGit(false); onChanged(); }
   }
   return <>
-    {!closed && <div className="action-bar">
-      {(sessionAction === 'restore' || sessionAction === 'background') && !pending && <Button disabled={busy} onClick={confirmSessionAction}>{t.actions[sessionAction]}</Button>}
+    {!closed && <div className="action-bar" tabIndex={-1}>
+      {canContinue && latestAttempt && <Button disabled={busy} onClick={() => confirmSessionAction('continue')}>{t.actions.continue}</Button>}
+      {canPause && <Button disabled={busy} onClick={() => confirmSessionAction('pause')}>
+        {pausing ? t.actions.pauseRetry : t.actions.pause}</Button>}
+      {(sessionAction === 'restore' || sessionAction === 'background') && !pending &&
+        <Button disabled={busy} onClick={() => confirmSessionAction(sessionAction)}>{t.actions[sessionAction]}</Button>}
       {primary && <Button loading={busy} disabled={pending} variant={primary === 'unschedule' || sessionAction === 'restore' ? 'default' : 'filled'}
         onClick={() => void execute(primary)}>{t.actions[primary]}</Button>}
       {foreground && task.status === 'queued' && task.reworkPending && !pending &&
         <p className="action-hint muted small">{t.session.foregroundReworkHint}</p>}
       {canEndDiscussion && <Button loading={ending} disabled={busy || pending}
         onClick={() => void endDiscussion()}>{t.actions.endDiscussion}</Button>}
-      {task.status === 'review' && delivery?.review === null && !acceptedIntegration && <>
-        <Button onClick={() => setConfirmation({ action: 'accept', delivery })}>{t.actions.accept} · v{delivery.version}</Button>
-        <Button variant="default" onClick={() => setConfirmation({ action: 'rework', delivery })}>{t.actions.rework}</Button>
+      {task.status === 'review' && delivery?.review === null && !acceptedIntegration && !accepted && <>
+        <Button disabled={awaitingSettle} onClick={() => setConfirmation({ action: 'accept', delivery })}>{t.actions.accept} · v{delivery.version}</Button>
+        <Button variant="default" disabled={awaitingSettle} onClick={() => setConfirmation({ action: 'rework', delivery })}>{t.actions.rework}</Button>
+        <Button variant="transparent" onClick={() => setRecordGuide(true)}>{t.lifecycle.recordGuide}</Button>
       </>}
+      {task.status === 'review' && delivery?.review === null && !acceptedIntegration && !accepted && latestAttempt &&
+        <p className="action-hint muted small">
+          {deliverySettled ? t.lifecycle.settledHint : latestAttempt.endedAt === null ? t.lifecycle.closingHint : t.lifecycle.unsettledEndedHint}
+        </p>}
+      {accepted && !git && phase === 'cleanup_pending' &&
+        <p className="action-hint muted small">{t.lifecycle.cleanupPendingHint}</p>}
+      {accepted && !git && cleanupBlocked &&
+        <p role="alert" className="callout warning">{t.lifecycle.cleanupBlockedHint}</p>}
       {retryBlocked && <Button loading={retryingGit} disabled={busy}
         onClick={() => void retryGit()}>{git?.phase === 'merge_blocked' ? t.git.retryMerge : t.git.retryCleanup}</Button>}
       {retryBlocked && <p className="action-hint muted small">
-        {git?.phase === 'merge_blocked' ? t.git.retryMergeHint : t.git.retryCleanupHint}</p>}
+        {git?.phase === 'merge_blocked' ? t.git.retryMergeHint : git ? t.git.retryCleanupHint : t.lifecycle.retryCleanupHint}</p>}
       {gitActive && <p className="action-hint muted small">{t.git.locked}</p>}
-      <div className="task-management"><p>{t.task.management}</p><Group gap="xs">
+      {!accepted && <div className="task-management"><p>{t.task.management}</p><Group gap="xs">
       {sessionAction === 'restart' && !pending && <Button variant="outline" disabled={busy || ending}
-        onClick={confirmSessionAction}>{t.actions.restart}</Button>}
+        onClick={() => confirmSessionAction('restart')}>{t.actions.restart}</Button>}
       <Button variant="transparent" disabled={busy} onClick={onEdit}>{t.common.editTask}</Button>
       <Button variant="outline" disabled={busy || ending || gitActive || (pending && !sessionOperation.needsExitVerification)}
         onClick={() => setConfirmation({ action: 'cancel' })}>{t.actions.cancel}</Button>
-      </Group></div>
+      </Group></div>}
     </div>}
     <ErrorNotice error={error} />
+    {recordGuide && <RecordGuideDialog onClose={() => setRecordGuide(false)} />}
     {confirmation && <ConfirmTaskAction taskId={task.id} confirmation={confirmation} onClose={() => setConfirmation((current) => current === confirmation ? undefined : current)}
       onChanged={onChanged} onSucceeded={(source) => { completedSource.current = source; onChanged(); }} focusFallback={focusFallback} />}
   </>;
@@ -189,7 +220,7 @@ function ConfirmTaskAction({ taskId, confirmation, onClose, onChanged, onSucceed
 
   const cancelButton = <Button key="cancel" variant="default" disabled={busy} onClick={close}>{t.common.dismiss}</Button>;
   const submitButton = <Button key="submit" type="submit" variant="filled"
-    className={action === 'cancel' || action === 'restart' ? 'pwa-danger-confirm' : undefined} loading={busy}>{t.actions[action]}</Button>;
+    className={action === 'cancel' || action === 'restart' || action === 'pause' ? 'pwa-danger-confirm' : undefined} loading={busy}>{t.actions[action]}</Button>;
   return <Modal opened={opened} returnFocus={opened || !isValidDialogFocus(document.activeElement as HTMLElement | null)}
     onExitTransitionEnd={exited} onClose={close} title={t.actions[action]} size={PWA_CONFIRM_DIALOG_SIZE}
     closeOnEscape={!busy} closeOnClickOutside={!busy} withCloseButton={!busy} closeButtonProps={{ 'aria-label': t.common.close }}>
@@ -207,5 +238,29 @@ function ConfirmTaskAction({ taskId, confirmation, onClose, onChanged, onSucceed
         </div>
       </Stack>
     </form>
+  </Modal>;
+}
+
+// 补充记录只能在原 Pi 会话内执行；此处只解释入口，不代发请求。
+function RecordGuideDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
+  const [opened, setOpened] = useState(false);
+  const closing = useRef(false);
+  useEffect(() => { setOpened(true); }, []);
+  function close() {
+    if (closing.current) return;
+    closing.current = true;
+    setOpened(false);
+  }
+  return <Modal opened={opened} onExitTransitionEnd={() => { if (closing.current) onClose(); }} onClose={close}
+    title={t.lifecycle.recordGuide} size={PWA_CONFIRM_DIALOG_SIZE} closeButtonProps={{ 'aria-label': t.common.close }}>
+    <Stack gap="sm">
+      <p className="pwa-confirm-description">{t.lifecycle.recordGuideIntro}</p>
+      <p className="user-text">{t.lifecycle.recordGuideSteps}</p>
+      <p className="muted small">{t.lifecycle.recordGuideNote}</p>
+      <div className="pwa-confirm-actions">
+        <Button variant="default" onClick={close}>{t.common.dismiss}</Button>
+      </div>
+    </Stack>
   </Modal>;
 }

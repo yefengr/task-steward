@@ -17,7 +17,7 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 const executionTools = ['steward_task', 'steward_prepare_git', 'steward_record_workspace', 'steward_progress', 'steward_ask', 'steward_question_update',
-  'steward_decision', 'steward_deliver', 'steward_finish'];
+  'steward_decision', 'steward_deliver', 'steward_continue', 'steward_revise_delivery', 'steward_finish'];
 const foregroundTools = ['steward_begin_task', 'steward_interrupt_task'];
 const managementTools = ['steward_list_projects', 'steward_list_tasks', 'steward_get_task', 'steward_create_task', 'steward_update_task'];
 const directories: string[] = [];
@@ -318,11 +318,14 @@ it('创建请求取消后使用原参数重试时复用请求 ID', async () => {
   expect(fetcher.mock.calls[0]?.[1]?.body).toBe(fetcher.mock.calls[1]?.[1]?.body);
 });
 
-it('交付未开始、失败和请求未完成时拦截 finish，确认成功后才 shutdown', async () => {
+it('交付未开始、失败和请求未完成时拦截 finish，确认成功后仅结算不退出', async () => {
   let unblock: (response: Response) => void = () => { throw new Error('交付请求没有发出'); };
   let deliveries = 0;
   const fetcher = vi.fn<typeof fetch>(async (url) => {
     if (String(url).endsWith('/context')) return Response.json(taskContext('/tmp'));
+    if (String(url).endsWith('/control')) return Response.json({ type: 'implementation', deliverySaved: false,
+      waitId: null, discussionEndRequested: false });
+    if (String(url).endsWith('/settle')) return Response.json({ ok: true });
     if (++deliveries === 1) return Response.json({ error: { code: 'internal_error', message: '不可回显的诊断内容' } }, { status: 500 });
     return new Promise((resolve) => { unblock = resolve; });
   });
@@ -340,7 +343,8 @@ it('交付未开始、失败和请求未完成时拦截 finish，确认成功后
   unblock(Response.json(saved));
   expect((await pending).details).toEqual(saved);
   expect((await agent.call('steward_finish')).details).toEqual({ ok: true });
-  expect(agent.shutdown).toHaveBeenCalledTimes(1);
+  expect(agent.shutdown).not.toHaveBeenCalled();
+  expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/settle'))).toBe(true);
 });
 
 it('重载扩展后交付重试保留每次尝试固定的请求 ID 和载荷', async () => {

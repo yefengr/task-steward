@@ -53,7 +53,7 @@ export class GitLifecycle {
     } else {
       const prior = state.gitOperations.find((item) => item.mergeAcknowledged && item.cleanupIssued &&
         item.operation.taskId === operation.taskId && item.operation.deliveryId === operation.deliveryId &&
-        item.operation.projectId === operation.projectId && item.operation.repositoryPath === operation.repositoryPath &&
+        item.operation.sourceAttemptId === operation.sourceAttemptId && item.operation.projectId === operation.projectId && item.operation.repositoryPath === operation.repositoryPath &&
         item.operation.worktreePath === operation.worktreePath && item.operation.taskBranch === operation.taskBranch &&
         item.operation.baseBranch === operation.baseBranch && item.operation.baseCommit === operation.baseCommit &&
         item.operation.approvedCommit === operation.approvedCommit);
@@ -73,7 +73,15 @@ export class GitLifecycle {
       if (wasPending) return;
       delete entry.report; delete entry.reportAcknowledged; this.save();
     }
-    if (busy || state.claimRequestId || state.executions.length || state.sessionOperations?.some((item) => !item.reportAcknowledged)) return;
+    const retainedOnly = operation.phase === 'merge' && !operation.foregroundOwner &&
+      state.executions.every((item) => item.phase === 'observed' && item.workSettled === true && item.identityVerified === true);
+    // 清理仅可忽略其他已核实结算的专用会话；来源未知或源会话仍保留时失败关闭。
+    // 这不是占用豁免：后续 verifySource/cleanupAccepted 仍须核对工作树无人使用。
+    const unrelatedRetainedOnly = operation.phase === 'cleanup' && operation.sourceAttemptId !== undefined &&
+      state.executions.every((item) => item.id !== operation.sourceAttemptId && item.phase === 'observed' &&
+        item.workSettled === true && item.identityVerified === true);
+    if (busy || state.claimRequestId || (state.executions.length > 0 && !retainedOnly && !unrelatedRetainedOnly) ||
+      state.sessionOperations?.some((item) => !item.reportAcknowledged)) return;
     const project = config.projects.find((item) => item.id === operation.projectId);
     let release: (() => void) | undefined;
     try {
@@ -89,7 +97,7 @@ export class GitLifecycle {
         entry.merged = true; entry.mergeAcknowledged = true; this.save();
       }
       if (!entry.merged) {
-        await verifySource(operation);
+        await verifySource(operation, false, retainedOnly && state.executions.length > 0);
         entry.mergeIssued = true; this.save();
         await mergeAccepted(operation);
         // merged 与稳定 requestId/body 必须在同一次原子状态保存中落盘。

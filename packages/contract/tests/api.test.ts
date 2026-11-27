@@ -53,6 +53,12 @@ const gitOperation = { id, taskId: id, projectId, deliveryId: id, baseBranch: gi
   baseCommit: gitState.baseCommit, taskBranch: gitState.taskBranch, repositoryPath: gitState.repositoryPath,
   worktreePath: gitState.worktreePath, approvedCommit: 'b'.repeat(40), mergedCommit: null, phase: 'merge' };
 
+it('Git操作绑定源执行，旧操作缺失定位保持可读但不伪造源身份', () => {
+  expect(c.launcherGitOperationSchema.parse({ ...gitOperation, sourceAttemptId: id }).sourceAttemptId).toBe(id);
+  expect(c.launcherGitOperationSchema.parse(gitOperation)).not.toHaveProperty('sourceAttemptId');
+  expect(c.launcherGitOperationSchema.safeParse({ ...gitOperation, sourceAttemptId: 'unknown' }).success).toBe(false);
+});
+
 type SchemaName = Extract<keyof typeof c, `${string}Schema`>;
 const samples = {
   agentSchema: ['pi', 'other'], taskStatusSchema: ['review', 'needs_verification'], errorCodeSchema: ['conflict', 'unknown'],
@@ -135,6 +141,15 @@ const samples = {
   foregroundLookupResponseSchema: [{ binding: null }, { binding: { goalId: id, ownerId: id } }],
   foregroundHeartbeatRequestSchema: [request, {}], foregroundSettleRequestSchema: [request, { ...request, force: true }],
   foregroundInterruptRequestSchema: [request, {}],
+  lifecyclePhaseSchema: ['settled', 'terminated'],
+  taskLifecycleSchema: [{ phase: 'paused', acceptedAt: null, message: null }, { phase: 'paused' }],
+  workPermissionSchema: [{ workRevision: 1, settled: true, implementationAllowed: false, recordAllowed: true }, { workRevision: -1 }],
+  agentSettleRequestSchema: [request, { ...request, force: true }],
+  agentContinueRequestSchema: [{ ...request, deliveryId: id, reason: '用户要求续做', authorizedByUser: true },
+    { ...request, deliveryId: id, reason: '无明确授权', authorizedByUser: false }],
+  agentContinueResponseSchema: [{ workRevision: 1 }, { workRevision: -1 }],
+  agentDeliveryRevisionRequestSchema: [{ ...request, ...deliveryContent, deliveryId: id, reason: '补已有验证结果', authorizedByUser: true },
+    { ...request, ...deliveryContent, deliveryId: id, authorizedByUser: true }],
   pairingCodeSchema: [code, code.toLowerCase()],
   createPairingRequestSchema: [{ name: 'Mac', tokenHash }, { name: 'Mac', tokenHash, machineToken: token }],
   createPairingResponseSchema: [{ code, expiresAt: 100 }, { code, expiresAt: -1 }],

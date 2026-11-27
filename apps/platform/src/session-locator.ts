@@ -28,6 +28,12 @@ export function sessionInUse(store: Store, machineId: string, locator: PiSession
   machineId, taskId, locator.sessionFile, locator.sessionId));
 }
 
+// 替换进程的暂停接续也必须固定现场；不能只用同进程工作段版本判断。
+export function isContinuedWork(store: Store, attempt: AttemptRow) {
+  return attempt.work_revision > 0 || Boolean(store.get(
+    "SELECT 1 FROM session_operations WHERE replacement_id=? AND mode='continue'", attempt.id));
+}
+
 export function sameLocator(a: PiSessionLocator | undefined, b: PiSessionLocator) {
   return a?.path === b.path && a.sessionId === b.sessionId && a.sessionFile === b.sessionFile;
 }

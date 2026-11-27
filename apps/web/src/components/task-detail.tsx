@@ -6,7 +6,7 @@ import { useTaskViewState } from '../lib/task-view-state';
 import { isValidDialogFocus } from '../lib/dialog-focus';
 import { useI18n } from '../lib/i18n';
 import { projectPath } from '../lib/paths';
-import { GitPhaseChip, StatusChip, TaskFlags, TaskTypeLabel, TaskOriginLabel, WaitReason } from './common';
+import { describeLifecycleMessage, GitPhaseChip, StatusChip, TaskFlags, TaskTypeLabel, TaskOriginLabel, WaitReason } from './common';
 import { GitSection } from './git-section';
 import { TaskControls } from './task-controls';
 import { TaskForm } from './task-form';
@@ -20,7 +20,22 @@ function Attention({ detail }: { detail: WebTaskDetailResponse }) {
   const pending = sessionOperation?.status === 'pending';
   const resumed = sessionOperation?.status === 'succeeded' && task.status === 'running';
   const failure = sessionOperation?.status === 'failed' ? sessionOperation.failure : null;
-  if (!questions.length && !pending && !resumed && !failure && !task.needsVerification && task.status !== 'interrupted') return null;
+  const accepted = task.lifecycle?.acceptedAt != null;
+  const phase = task.lifecycle?.phase;
+  const paused = phase === 'paused';
+  const pausing = phase === 'pausing';
+  const cleanupBlocked = phase === 'cleanup_blocked';
+  const lifecycleMessage = failure ? null : describeLifecycleMessage(task.lifecycle?.message, t);
+  const latestDelivery = detail.deliveries.at(-1);
+  const latestAttempt = detail.attempts.at(-1);
+  const reviewState = task.status === 'review' && Boolean(latestDelivery) && latestDelivery?.review === null && !accepted;
+  const settled = latestAttempt?.settledAt != null || phase === 'settled';
+  const acceptedCleanup = accepted && !task.git && (phase === 'cleanup_pending' || cleanupBlocked);
+  const resumeText = sessionOperation?.mode === 'continue' ? t.lifecycle.continueReady
+    : sessionOperation?.mode === 'background' ? t.session.continuingReady : t.session.ready;
+  const interrupted = task.status === 'interrupted' && !paused;
+  if (!questions.length && !pending && !resumed && !failure && !lifecycleMessage && !task.needsVerification &&
+      !paused && !pausing && !reviewState && !acceptedCleanup && !interrupted) return null;
   return <section className="detail-section">
     <h2>{t.task.attention}</h2>
     {questions.map((question) => <article className="callout" key={question.id}>
@@ -31,11 +46,20 @@ function Attention({ detail }: { detail: WebTaskDetailResponse }) {
     </article>)}
     {pending && <p role="status" className={`callout${sessionOperation.needsExitVerification ? ' warning' : ''}`}>
       {sessionOperation.needsExitVerification ? t.session.verifyingExit : t.session.pending[sessionOperation.mode]}</p>}
-    {resumed && <p role="status" className="callout">{sessionOperation?.mode === 'background' ? t.session.continuingReady : t.session.ready}</p>}
+    {resumed && <p role="status" className="callout">{resumeText}</p>}
     {failure && <p role="alert" className="callout warning">{t.session.failures[failure]}</p>}
+    {lifecycleMessage && <p role="alert" className="callout warning">{lifecycleMessage}</p>}
+    {paused && <p className="callout warning">{t.lifecycle.pausedHint}</p>}
+    {pausing && !pending && !failure && <p role="status" className="callout">{t.lifecycle.pausingHint}</p>}
     {task.needsVerification && !pending && <p className="callout warning">{t.task.verificationHint}</p>}
-    {task.status === 'interrupted' && !pending && <p className="callout warning">
-      {task.agent === 'pi' && detail.attempts.at(-1)?.agent === 'pi' ? detail.attempts.at(-1)?.executionMode === 'foreground' ? t.session.foregroundInterrupted : t.session.interrupted : t.task.interruptedHint}</p>}
+    {reviewState && !pending && !failure && latestAttempt && <p className="callout neutral">
+      {settled ? t.lifecycle.settledHint : latestAttempt.endedAt === null ? t.lifecycle.closingHint : t.lifecycle.unsettledEndedHint}</p>}
+    {acceptedCleanup && phase === 'cleanup_pending' && <p role="status" className="callout">{t.lifecycle.cleanupPendingHint}</p>}
+    {acceptedCleanup && cleanupBlocked && <p role="alert" className="callout warning">{t.lifecycle.cleanupBlockedHint}</p>}
+    {interrupted && !pending && <p className="callout warning">
+      {task.agent === 'pi' && latestAttempt?.agent === 'pi'
+        ? (latestAttempt?.processMode ?? latestAttempt?.executionMode) === 'foreground' ? t.session.foregroundInterrupted : t.session.interrupted
+        : t.task.interruptedHint}</p>}
   </section>;
 }
 

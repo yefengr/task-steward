@@ -26,6 +26,19 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
   let lifetime: AbortController | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let operations = Promise.resolve();
+  let userInputPending = 0;
+  let inputSequence = 0;
+
+  function accept(next: Partial<c.AgentControlResponse>) {
+    if (next.workRevision !== undefined && next.workRevision !== control?.workRevision) {
+      control = undefined;
+      closingTurns = 0;
+      nextClosingAt = 0;
+      uncertainWait = true;
+    }
+    control = { ...control, ...next } as c.AgentControlResponse;
+    if (next.type) taskType = next.type;
+  }
 
   function serial<T>(run: () => Promise<T>): Promise<T> {
     const next = operations.then(run);
@@ -38,10 +51,15 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
   }
 
   async function read(signal?: AbortSignal) {
+    const inputAtStart = userInputPending;
     const next = await request('GET', 'control', c.agentControlResponseSchema, undefined, signal);
     if (signal?.aborted) return next;
-    control = next;
-    taskType = next.type;
+    accept(next);
+    // 输入前已在途的旧读取不能消费新输入，否则会把抑制记到旧段。
+    if (inputAtStart && inputAtStart === userInputPending && context) {
+      if (!continuationIssued(context)) pi.appendEntry(CONTINUE_ENTRY, continuationKey());
+      userInputPending = 0;
+    }
     uncertainWait = false;
     return next;
   }
@@ -96,19 +114,20 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
     remember();
   }
 
+  function continuationKey() { return control?.workRevision ? `${attemptId}:${control.workRevision}` : attemptId; }
   function continuationIssued(ctx: ExtensionContext) {
     return ctx.sessionManager.getEntries().some((entry) => entry.type === 'custom' &&
-      entry.customType === CONTINUE_ENTRY && entry.data === attemptId);
+      entry.customType === CONTINUE_ENTRY && entry.data === continuationKey());
   }
 
   function startContinuation(ctx: ExtensionContext, state: c.AgentControlResponse) {
-    if (!continuation || manual || !state.continuationReady || state.deliverySaved || state.discussionEndRequested ||
+    if (userInputPending || (!continuation && !state.workRevision) || manual || !state.continuationReady || state.deliverySaved || state.discussionEndRequested ||
         !ctx.isIdle() || continuationIssued(ctx)) return;
     // 先保存一次性发送意图；发送结果未知时不自动重放有副作用的接续。
-    pi.appendEntry(CONTINUE_ENTRY, attemptId);
+    pi.appendEntry(CONTINUE_ENTRY, continuationKey());
     try {
       pi.sendMessage({ customType: 'steward-background-continue', display: true,
-        content: '用户已请求从前台中断处后台继续本任务。先调用 steward_task 读取最新目标与授权，核对原会话、工作现场、实际进展及中断操作结果，再判断继续执行还是提问等待。不得重放初次开工指令或旧工具请求，不扩大授权。',
+        content: '用户已授权在原会话接续本任务。先调用 steward_task 读取最新目标与授权，核对原会话、工作现场、实际进展及中断操作结果，再判断继续执行还是提问等待。不得重放初次开工指令或旧工具请求，不扩大授权。',
       }, { triggerTurn: true, deliverAs: 'followUp' });
     } catch {
       if (ctx.hasUI) ctx.ui.notify('自动接续消息发送未确认，未重复发送。请在原会话核对实际进展后继续。', 'warning');
@@ -123,8 +142,8 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
       await flushEnd(signal);
       await flushReply(signal);
       if (signal.aborted) return;
-      if (!manual && state.type === 'discussion' && control?.discussionEndRequested && state.deliverySaved && ctx.isIdle()) finish(ctx);
-      else if (!state.deliverySaved) { startClosingTurn(ctx); startContinuation(ctx, state); }
+      if (state.pauseRequested || (!manual && state.closeRequested)) { finish(ctx); return; }
+      if (!state.deliverySaved) { startClosingTurn(ctx); startContinuation(ctx, state); }
     } catch (error) {
       if (error instanceof AgentError && error.code === 'attempt_ended' && !signal.aborted) lifetime?.abort();
       // 离线不丢待确认操作；下次轮询会重试同一请求编号。
@@ -140,6 +159,7 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
     pendingReply = undefined;
     pendingEnd = undefined;
     uncertainWait = true;
+    userInputPending = 0;
     closingTurns = 0;
     shutdownRequested = false;
     context = ctx;
@@ -172,7 +192,7 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
   pi.on('input', async (event) => {
     if (!context || (!event.text.trim() && !event.images?.length)) return;
     // 原生用户输入优先于尚未发送的自动接续，不在其后另开一轮旧目标指令。
-    if (continuation && !continuationIssued(context)) pi.appendEntry(CONTINUE_ENTRY, attemptId);
+    userInputPending = ++inputSequence;
     const end = closeInput.test(event.text.trim());
     const signal = lifetime?.signal;
     const operation = serial(async () => {
@@ -190,6 +210,8 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
         remember();
       }
       await flushReply(signal);
+      // 保持普通输入不等待网络；下一次控制读取前先登记用户优先意图。
+      await read(signal);
     }).catch(() => undefined);
     // 普通输入不等网络；串行队列保证其回复确认先于下一次显式提问。
     if (end) await operation;
@@ -201,7 +223,7 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
     event.systemPromptOptions.promptGuidelines.push(
       'Steward：需要用户回答明确问题时调用 steward_ask，再在原 Pi 会话提问并等待；普通对话不要调用该工具。',
       manual ? '若 steward_task 显示讨论（discussion），只围绕讨论目标交流；普通回合结束不交付、不结束目标。只有收到 Steward 已确认的结束请求才保存简短结论与未决事项，再 steward_finish 解除绑定但不退出 Pi。' :
-      '若 steward_task 显示讨论（discussion），只围绕讨论目标交流；普通回合结束、没有回复或已经形成结论，都不交付也不退出。只有收到 Steward 已确认的结束请求才整理简短结论与未决事项、交付并退出。',
+      '若 steward_task 显示讨论（discussion），只围绕讨论目标交流；普通回合结束、没有回复或已经形成结论，都不交付也不退出。只有收到 Steward 已确认的结束请求才整理简短结论与未决事项、交付并调用 steward_finish 结算工作段，但不退出；最终验收后的明确 closeRequested 才退出。',
     );
     if (control?.type === 'discussion' && control.discussionEndRequested) {
       event.systemPromptOptions.promptGuidelines.push(
@@ -211,7 +233,7 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
   });
 
   return {
-    activate, deactivate,
+    activate, deactivate, accept,
     get discussionEndConfirmed() { return control?.discussionEndRequested === true; },
     finish,
     get deliverySaved() { return control?.deliverySaved === true; },

@@ -9,7 +9,7 @@ export const piSessionLocatorSchema = z.strictObject({
 export type PiSessionLocator = z.infer<typeof piSessionLocatorSchema>;
 export const agentSessionRequestSchema = requestIdSchema.extend({ locator: piSessionLocatorSchema });
 
-export const sessionOperationModeSchema = z.enum(['restart', 'restore', 'background']);
+export const sessionOperationModeSchema = z.enum(['restart', 'restore', 'background', 'pause', 'continue', 'finalize']);
 export const sessionOperationFailureSchema = z.enum([
   'session_workspace_unavailable', 'session_record_missing', 'session_config_unsupported',
   'session_stop_failed', 'session_launch_failed', 'session_timeout', 'session_source_alive', 'session_ownership_unavailable',
@@ -33,7 +33,8 @@ export const launcherSessionDirectiveSchema = z.discriminatedUnion('step', [
   permission.extend({ step: z.literal('launch'), replacementId: uuidSchema }),
   operation.extend({ step: z.literal('cleanup'), replacementId: uuidSchema,
     foregroundOwner: permission.shape.foregroundOwner, foregroundGit: permission.shape.foregroundGit }),
-]);
+]).refine((directive) => directive.step === 'stop' || !['pause', 'finalize'].includes(directive.mode),
+  { message: 'Pause and finalization only authorize stopping the original process' });
 export type LauncherSessionDirective = z.infer<typeof launcherSessionDirectiveSchema>;
 export const launcherSessionReportSchema = z.discriminatedUnion('result', [
   requestIdSchema.extend({ result: z.literal('stopped'), step: z.literal('stop') }),

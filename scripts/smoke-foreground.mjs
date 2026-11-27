@@ -91,7 +91,9 @@ try {
     const result = lines.map((line) => JSON.parse(line)).findLast((entry) => entry.type === 'message' &&
       entry.message.role === 'toolResult' && entry.message.toolName === 'steward_progress');
     if (!result) return false;
-    assert.equal(result.message.details?.code, 'session_handover_pending', JSON.stringify(result.message));
+    // 生命周期门禁可在工具发送前拒绝；仍须明确交接原因，不能误报原绑定已丢失。
+    assert.ok(result.message.details?.code === 'session_handover_pending' ||
+      (result.message.isError === true && result.message.content.some((part) => part.text?.includes('session_handover_pending'))), JSON.stringify(result.message));
     return true;
   });
   assert.equal(store.get('SELECT COUNT(*) n FROM progress').n, 0);
@@ -133,7 +135,7 @@ try {
   const continuationMessages = conversation.trim().split('\n').map((line) => JSON.parse(line))
     .filter((entry) => entry.type === 'custom_message' && entry.customType === 'steward-background-continue');
   assert.equal(continuationMessages.length, 1);
-  assert.ok(continuationMessages[0].content.includes('用户已请求从前台中断处后台继续'));
+  assert.ok(continuationMessages[0].content.includes('用户已授权在原会话接续本任务'));
   assert.equal(store.get('SELECT COUNT(*) n FROM tasks').n, 1);
   console.log('真实 Pi 前台冒烟通过：普通会话纳管；stop 期间收到可重试错误，活进程拒绝接管后原 Pi 无需重绑可回报；退出后同任务/同原生对话后台接续并实际写入；未重放初始指令。');
 } finally {

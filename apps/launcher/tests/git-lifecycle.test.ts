@@ -28,7 +28,7 @@ afterEach(() => { race.beforeUpdate = undefined; for (const dir of dirs.splice(0
 function g(root: string, ...args: string[]) { return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_'))) }).trim(); }
 function commit(root: string, name: string) { writeFileSync(join(root, name), name); g(root, 'add', name); g(root, 'commit', '-qm', name); return g(root, 'rev-parse', 'HEAD'); }
-function fixture() {
+function fixture(sourceAttemptId?: string) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'steward-finalize-'))); dirs.push(dir);
   const root = join(dir, 'repo'); mkdirSync(root); g(root, 'init', '-qb', 'main');
   g(root, 'config', 'user.name', 'test'); g(root, 'config', 'user.email', 'test@example.invalid');
@@ -39,6 +39,7 @@ function fixture() {
   writeFileSync(marker, JSON.stringify({ schemaVersion: 1, createdAt: new Date().toISOString() }));
   const accepted = commit(source, 'accepted');
   const operation: LauncherGitOperation = { id: randomUUID(), taskId: randomUUID(), projectId: 'p', deliveryId: randomUUID(),
+    ...(sourceAttemptId ? { sourceAttemptId } : {}),
     baseBranch: 'main', baseCommit: base, taskBranch: 'feature/task', repositoryPath: root, worktreePath: source,
     approvedCommit: accepted, mergedCommit: null, phase: 'merge' };
   const config = { projects: [{ id: 'p', path: root }] } as LocalConfig;
@@ -90,6 +91,145 @@ it('in-use process blocks source cleanup', async () => {
   await new Promise<void>((resolve) => child.once('spawn', resolve));
   try { await expect(verifySource(x.operation)).rejects.toMatchObject({ reason: 'git_worktree_in_use' }); }
   finally { child.kill(); await new Promise<void>((resolve) => child.once('exit', () => resolve())); }
+});
+it('retained dedicated Pi permits merge only; cleanup still refuses its live worktree', async () => {
+  const x = fixture(); const child = spawn('/bin/sleep', ['30'], { cwd: x.source });
+  await new Promise<void>((resolve) => child.once('spawn', resolve));
+  try {
+    const state = loadState(x.file); const id = randomUUID();
+    state.executions.push({ id, target: `steward-${id}`, phase: 'observed', occupiesSlot: false, workSettled: true, identityVerified: true, pid: child.pid });
+    saveState(x.file, state);
+    await x.start().apply(x.operation, false);
+    expect(x.reportGit.mock.lastCall?.[1].outcome).toBe('merged');
+    expect(g(x.root, 'rev-parse', 'main')).toBe(x.accepted);
+    const cleanup = { ...x.operation, phase: 'cleanup' as const, mergedCommit: x.accepted };
+    x.reportGit.mockClear(); await x.start().apply(cleanup, false);
+    expect(x.reportGit).not.toHaveBeenCalled(); expect(existsSync(x.source)).toBe(true);
+    // 即便本地记录丢失，清理的原生占用检查也不可跳过。
+    const lost = loadState(x.file); lost.executions = []; saveState(x.file, lost);
+    await x.start().apply(cleanup, false);
+    expect(x.reportGit.mock.lastCall?.[1]).toMatchObject({ outcome: 'blocked', message: 'git_worktree_in_use' });
+    await expect(verifySource(cleanup, false, true)).rejects.toMatchObject({ reason: 'git_worktree_in_use' });
+  } finally { child.kill(); await new Promise<void>((resolve) => child.once('exit', () => resolve())); }
+});
+it.each(['complete', 'source retained', 'legacy source', 'unsettled', 'unknown identity', 'unknown settlement',
+  'unobserved', 'busy', 'claim', 'session', 'source occupied'] as const)(
+  'cleanup beside a live unrelated retained Pi: %s', async (mode) => {
+    const sourceId = randomUUID(); const otherId = randomUUID();
+    const x = fixture(mode === 'legacy source' ? undefined : sourceId);
+    const other = join(x.dir, 'other');
+    g(x.root, 'worktree', 'add', '-b', 'feature/other', other, x.base);
+    const otherHead = g(other, 'rev-parse', 'HEAD');
+    const a = spawn('/bin/sleep', ['60'], { cwd: x.source });
+    const b = spawn('/bin/sleep', ['60'], { cwd: other });
+    const stop = async (child: typeof a) => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+      child.kill(); await exited;
+    };
+    try {
+      await Promise.all([a, b].map((child) => new Promise<void>((resolve, reject) => {
+        child.once('spawn', resolve); child.once('error', reject);
+      })));
+      const state = loadState(x.file);
+      for (const [id, pid] of [[sourceId, a.pid], [otherId, b.pid]] as const) {
+        state.executions.push({ id, pid, target: `steward-${id}`, phase: 'observed', occupiesSlot: false,
+          workSettled: true, identityVerified: true });
+      }
+      saveState(x.file, state);
+      await x.start().apply(x.operation, false);
+      expect(x.reportGit.mock.lastCall?.[1].outcome).toBe('merged');
+      expect(g(x.root, 'rev-parse', 'main')).toBe(x.accepted);
+      expect(loadState(x.file).gitOperations![0]!.operation.sourceAttemptId).toBe(x.operation.sourceAttemptId);
+      if (mode !== 'source occupied' && mode !== 'source retained') await stop(a);
+      const saved = loadState(x.file);
+      if (mode !== 'source retained') saved.executions = saved.executions.filter((item) => item.id !== sourceId);
+      const retained = saved.executions.find((item) => item.id === otherId)!;
+      if (mode === 'unsettled') retained.workSettled = false;
+      if (mode === 'unknown settlement') delete retained.workSettled;
+      if (mode === 'unknown identity') delete retained.identityVerified;
+      if (mode === 'unobserved') retained.phase = 'exited';
+      if (mode === 'claim') saved.claimRequestId = randomUUID();
+      if (mode === 'session') saved.sessionOperations = [{ id: randomUUID(), attemptId: otherId, step: 'stop' }];
+      const executions = structuredClone(saved.executions);
+      saveState(x.file, saved); x.reportGit.mockClear();
+      const cleanup = { ...x.operation, phase: 'cleanup' as const, mergedCommit: x.accepted };
+      await x.start().apply(cleanup, mode === 'busy');
+      if (mode === 'complete') {
+        expect(x.reportGit.mock.lastCall?.[1].outcome).toBe('complete');
+        expect(existsSync(x.source)).toBe(false);
+        expect(g(x.root, 'for-each-ref', '--format=%(objectname)', 'refs/heads/feature/task')).toBe('');
+        // 稳定终态可重放，但不会再次合并或重复回报。
+        await x.start().apply(cleanup, false); expect(x.reportGit).toHaveBeenCalledTimes(1);
+      } else {
+        if (mode === 'source occupied') {
+          expect(x.reportGit.mock.lastCall?.[1]).toMatchObject({ outcome: 'blocked', message: 'git_worktree_in_use' });
+        } else expect(x.reportGit).not.toHaveBeenCalled();
+        expect(existsSync(x.source)).toBe(true);
+        expect(g(x.root, 'rev-parse', 'feature/task')).toBe(x.accepted);
+      }
+      expect(g(x.root, 'rev-parse', 'main')).toBe(x.accepted);
+      expect(loadState(x.file).executions).toEqual(executions);
+      expect(existsSync(other)).toBe(true); expect(g(other, 'rev-parse', 'HEAD')).toBe(otherHead);
+      expect(g(x.root, 'rev-parse', 'feature/other')).toBe(otherHead);
+      expect(b.exitCode).toBeNull(); expect(b.signalCode).toBeNull(); process.kill(b.pid!, 0);
+    } finally { await Promise.all([stop(a), stop(b)]); }
+  });
+it.each([true, false])('cleanup requires every unrelated retained execution to be settled: %s', async (allSettled) => {
+  const x = fixture(randomUUID()); await x.start().apply(x.operation, false);
+  const children = [spawn('/bin/sleep', ['60'], { cwd: x.root }), spawn('/bin/sleep', ['60'], { cwd: x.root })];
+  try {
+    await Promise.all(children.map((child) => new Promise<void>((resolve, reject) => {
+      child.once('spawn', resolve); child.once('error', reject);
+    })));
+    const state = loadState(x.file);
+    for (const [index, child] of children.entries()) {
+      const id = randomUUID();
+      state.executions.push({ id, target: `steward-${id}`, phase: 'observed', pid: child.pid,
+        occupiesSlot: false, workSettled: index === 0 || allSettled, identityVerified: true });
+    }
+    saveState(x.file, state); x.reportGit.mockClear();
+    await x.start().apply({ ...x.operation, phase: 'cleanup', mergedCommit: x.accepted }, false);
+    if (allSettled) {
+      expect(x.reportGit.mock.lastCall?.[1].outcome).toBe('complete');
+      expect(existsSync(x.source)).toBe(false);
+    } else {
+      expect(x.reportGit).not.toHaveBeenCalled();
+      expect(existsSync(x.source)).toBe(true);
+      expect(g(x.root, 'rev-parse', 'feature/task')).toBe(x.accepted);
+    }
+    expect(loadState(x.file).executions).toEqual(state.executions);
+    for (const child of children) { expect(child.exitCode).toBeNull(); process.kill(child.pid!, 0); }
+  } finally {
+    await Promise.all(children.map(async (child) => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve())); child.kill(); await exited;
+    }));
+  }
+});
+it('cleanup cannot change or infer the journal source attempt identity', async () => {
+  const x = fixture(randomUUID()); await x.start().apply(x.operation, false);
+  const cleanup = { ...x.operation, phase: 'cleanup' as const, mergedCommit: x.accepted };
+  x.reportGit.mockClear();
+  await x.start().apply({ ...cleanup, sourceAttemptId: randomUUID() }, false);
+  expect(x.reportGit).not.toHaveBeenCalled(); expect(existsSync(x.source)).toBe(true);
+  const legacy = fixture(); await legacy.start().apply(legacy.operation, false); legacy.reportGit.mockClear();
+  await legacy.start().apply({ ...legacy.operation, sourceAttemptId: randomUUID(), phase: 'cleanup', mergedCommit: legacy.accepted }, false);
+  expect(legacy.reportGit).not.toHaveBeenCalled(); expect(existsSync(legacy.source)).toBe(true);
+});
+it.each([undefined, true, false] as const)('other unsettled or legacy work (%s) blocks merge beside retained Pi', async (occupiesSlot) => {
+  const x = fixture(); const state = loadState(x.file);
+  for (const flag of [false, occupiesSlot]) {
+    const id = randomUUID(); state.executions.push({ id, target: `steward-${id}`, phase: 'observed', occupiesSlot: flag });
+  }
+  saveState(x.file, state); await x.start().apply(x.operation, false);
+  expect(x.reportGit).not.toHaveBeenCalled(); expect(g(x.root, 'rev-parse', 'main')).toBe(x.base);
+});
+it('merge occupancy exception never skips clean/HEAD checks', async () => {
+  const x = fixture(); writeFileSync(join(x.source, 'dirty'), 'dirty');
+  await expect(verifySource(x.operation, false, true)).rejects.toMatchObject({ reason: 'git_dirty' });
+  rmSync(join(x.source, 'dirty')); commit(x.source, 'late');
+  await expect(verifySource(x.operation, false, true)).rejects.toMatchObject({ reason: 'git_source_changed' });
 });
 it('exact FF succeeds and an already accepted ancestor preserves later base commits', async () => {
   const x = fixture(); await mergeAccepted(x.operation); expect(g(x.root, 'rev-parse', 'main')).toBe(x.accepted);

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { agentSchema, nonEmptyTextSchema, projectIdSchema, taskStatusSchema, textSchema, timestampSchema, tmuxSessionSchema, uuidSchema } from './core.js';
 import { piSessionIdSchema } from './session-control.js';
 import { gitBranchSchema, taskGitSchema } from './git-lifecycle.js';
+import { taskLifecycleSchema } from './lifecycle.js';
 
 export const titleSchema = z.string().trim().min(1).max(500);
 export const taskTypeSchema = z.enum(['discussion', 'implementation']);
@@ -33,11 +34,14 @@ export const taskSchema = taskContentSchema.extend({
   needsVerification: z.boolean(), needsResponse: z.boolean(), discussionEndRequested: z.boolean().default(false),
   type: taskTypeSchema.default('implementation'), git: taskGitSchema.nullable().optional(),
   priority: taskPrioritySchema.default('normal'), difficulty: taskDifficultySchema.default('unassessed'),
+  lifecycle: taskLifecycleSchema.optional(),
 });
 export const attemptSchema = z.strictObject({
   id: uuidSchema, taskId: uuidSchema, machineId: uuidSchema, machineName: z.string(), agent: agentSchema,
   kind: attemptKindSchema, sessionId: piSessionIdSchema, tmuxSession: tmuxSessionSchema.nullable(),
   executionMode: executionModeSchema.default('background'),
+  processMode: executionModeSchema.optional(), settledAt: timestampSchema.nullable().optional(),
+  workRevision: z.int().nonnegative().optional(),
   claimedAt: timestampSchema, startedAt: timestampSchema.nullable(), leaseExpiresAt: timestampSchema,
   cancelRequested: z.boolean(), endedAt: timestampSchema.nullable(),
   exitCode: z.int().nullable(), result: attemptResultSchema.nullable(), needsVerification: z.boolean(),
@@ -51,6 +55,8 @@ export const deliverySchema = deliveryContentSchema.extend({
   id: uuidSchema, taskId: uuidSchema, attemptId: uuidSchema, version: z.int().positive(),
   review: z.enum(['accepted', 'rework']).nullable(), feedback: textSchema.nullable(),
   reviewedAt: timestampSchema.nullable(), createdAt: timestampSchema,
+  sourceDeliveryId: uuidSchema.nullable().optional(), revisionReason: textSchema.nullable().optional(),
+  kind: z.enum(['implementation', 'record']).optional(), workRevision: z.int().nonnegative().optional(),
 });
 export const decisionSchema = z.strictObject({
   id: uuidSchema, taskId: uuidSchema, attemptId: uuidSchema.nullable(), text: nonEmptyTextSchema,

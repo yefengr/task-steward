@@ -3,7 +3,7 @@ import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rm
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
-import { claimedAttemptSchema, launcherExitedRequestSchema, launcherSessionReportSchema, launcherStartedRequestSchema, timestampSchema, tmuxSessionSchema, uuidSchema } from '@pi-steward/contract';
+import { launcherGitOperationSchema, launcherGitReportSchema, claimedAttemptSchema, launcherExitedRequestSchema, launcherSessionReportSchema, launcherStartedRequestSchema, timestampSchema, tmuxSessionSchema, uuidSchema } from '@pi-steward/contract';
 
 const execution = z.strictObject({
   id: uuidSchema,
@@ -31,15 +31,24 @@ const sessionOperation = z.strictObject({
   reportAcknowledged: z.boolean().optional(),
 }).refine(({ step, replacementId, report }) => (step === 'stop') === (replacementId === undefined) &&
   (!report || report.step === step));
+const gitOperation = z.strictObject({
+  operation: launcherGitOperationSchema,
+  mergeIssued: z.boolean().optional(), merged: z.boolean().optional(), mergeAcknowledged: z.boolean().optional(),
+  cleanupIssued: z.boolean().optional(), worktreeRemoved: z.boolean().optional(), cleaned: z.boolean().optional(),
+  report: launcherGitReportSchema.optional(), reportAcknowledged: z.boolean().optional(),
+  reportRejected: z.boolean().optional(),
+});
 const stateSchema = z.strictObject({
   version: z.literal(1),
   claimRequestId: uuidSchema.optional(),
   lastHeartbeatAt: timestampSchema.optional(),
   executions: z.array(execution),
+  gitOperations: z.array(gitOperation).optional(),
   sessionOperations: z.array(sessionOperation).optional(),
   outbox: z.array(event),
 });
 
+export type GitOperation = z.infer<typeof gitOperation>;
 export type State = z.infer<typeof stateSchema>;
 export type Execution = z.infer<typeof execution>;
 export type SessionOperation = z.infer<typeof sessionOperation>;

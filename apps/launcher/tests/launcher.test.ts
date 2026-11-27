@@ -51,7 +51,7 @@ function fixture(warn?: (message: string) => void) {
     setCancelled: () => { cancelled = true; }, setSession: (value: typeof session) => { session = value; },
     advance: (ms: number) => { now += ms; },
     restart: () => new Launcher({ config, version: 'test', state: loadState(path), save: (state) => saveState(path, state),
-      platform: { claim, report, heartbeat, reportSession: vi.fn() },
+      platform: { claim, report, heartbeat, reportSession: vi.fn(), reportGit: vi.fn() },
       tmux: { check, inspect, launch, cancel, panePid: vi.fn(), hasResumeIdentity: vi.fn(), processStatus: vi.fn(), launchResume: vi.fn() },
       now: () => now, warn }),
   };

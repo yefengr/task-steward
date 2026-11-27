@@ -37,6 +37,52 @@ it('web 与 managed 属性创建、独立更新、省略保留、重放和非法
   expect(c.launcherClaimResponseSchema.parse(await (await f.claim()).json()).attempt).toBeNull();
 });
 
+it('两属性与基准分支共同创建编辑，开工冻结 Git 后仍可独立改属性', async () => {
+  const f = await setup();
+  await f.heartbeat();
+  expect((await f.web(`/projects/${project.id}/git`, {
+    baseBranch: 'main', syncBeforeStart: false, version: 1,
+  }, 'PATCH')).status).toBe(200);
+  const auth = { machine: f.token };
+  const task = await taskOf(await f.send('/task-management/tasks', request({
+    projectId: project.id, title: 'Coexist', sessionId: 'session',
+    baseBranch: 'release', priority: 'low', difficulty: 'simple',
+  }), auth));
+  expect(task).toMatchObject({ baseBranch: 'release', priority: 'low', difficulty: 'simple' });
+  const path = `/tasks/${task.id}`;
+  const changed = await taskOf(await f.send(`/task-management${path}`, request({
+    version: task.version, sessionId: 'session', baseBranch: 'stable', priority: 'high', difficulty: 'medium',
+  }), { ...auth, method: 'PATCH' }));
+  expect(changed).toMatchObject({ baseBranch: 'stable', priority: 'high', difficulty: 'medium' });
+  await f.action(task.id, 'schedule');
+  const attempt = await f.claimed();
+  expect((await f.agent(attempt.id, '/git/prepare', request({
+    baseBranch: 'stable', baseCommit: 'a'.repeat(40), taskBranch: 'feature/coexist',
+    repositoryPath: project.path, syncBeforeStart: false, syncResult: 'disabled',
+  }))).status).toBe(200);
+  const before = await f.detail(task.id);
+  expect(before.task.git).toMatchObject({ baseBranch: 'stable', syncBeforeStart: false, phase: 'prepared' });
+  const gitContext = c.agentContextResponseSchema.parse(await (await f.agent(attempt.id, '/context')).json());
+  const updated = await taskOf(await f.web(path, {
+    version: before.task.version, priority: 'normal', difficulty: 'complex',
+  }, 'PATCH'));
+  expect(updated).toMatchObject({ baseBranch: 'stable', priority: 'normal', difficulty: 'complex', createdAt: task.createdAt });
+  const managed = await taskOf(await f.send(`/task-management${path}`, request({
+    version: updated.version, sessionId: 'session', priority: 'low',
+  }), { ...auth, method: 'PATCH' }));
+  expect(managed).toMatchObject({ baseBranch: 'stable', priority: 'low', difficulty: 'complex' });
+  await errorCode(await f.send(`/task-management${path}`, request({
+    version: managed.version, sessionId: 'session', baseBranch: 'other', priority: 'high',
+  }), { ...auth, method: 'PATCH' }), 409, 'conflict');
+  const after = await f.detail(task.id);
+  expect(after.task).toEqual(managed);
+  expect(after.task.git).toEqual(before.task.git);
+  expect(after.attempts).toEqual(before.attempts);
+  const context = c.agentContextResponseSchema.parse(await (await f.agent(attempt.id, '/context')).json());
+  expect(context.gitSettings).toEqual(gitContext.gitSettings);
+  expect(context.git).toEqual(gitContext.git);
+});
+
 it('领取比较优先级，同级保留 position、created_at、id 兜底，列表顺序不变', async () => {
   const f = await setup();
   await f.heartbeat(10);

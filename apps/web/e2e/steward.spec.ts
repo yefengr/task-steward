@@ -322,7 +322,7 @@ test('桌面新建、编辑、安排、返修和验收，移动端登录后保�
     await mobilePage.screenshot({ path: artifact('steward-mobile-drawer.png') });
     await mobilePage.emulateMedia({ colorScheme: 'dark' });
     await expect(mobilePage.locator('html')).toHaveAttribute('data-mantine-color-scheme', 'dark');
-    await drawer.getByRole('button', { name: /外观/ }).click();
+    await drawer.getByRole('combobox', { name: '外观', exact: true }).selectOption('light');
     await expect(mobilePage.locator('html')).toHaveAttribute('data-mantine-color-scheme', 'light');
     await drawer.getByRole('button', { name: '切换语言' }).click();
     await drawer.getByRole('link', { name: /^Machines/ }).click();

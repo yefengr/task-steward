@@ -14,10 +14,10 @@ import { openStore, sha256, Store } from '../src/store.js';
 it('迁移空库并开启外键，重复打开保留版本和数据', () => {
   const store = openStore(':memory:');
   try {
-    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 6 });
+    expect(store.get('PRAGMA user_version')).toMatchObject({ user_version: 7 });
     expect(store.get('PRAGMA foreign_keys')).toMatchObject({ foreign_keys: 1 });
     expect(store.get('PRAGMA busy_timeout')).toMatchObject({ timeout: 5000 });
-    expect(() => store.run('INSERT INTO projects VALUES (?,?,?,?)', 'project', 'Project', 'missing', 100)).toThrow(/FOREIGN KEY/);
+    expect(() => store.run('INSERT INTO projects (id,name,last_machine_id,created_at) VALUES (?,?,?,?)', 'project', 'Project', 'missing', 100)).toThrow(/FOREIGN KEY/);
     expect(store.all<{ name: string }>("SELECT name FROM sqlite_schema WHERE type='index' AND name='one_active_attempt'")).toHaveLength(1);
   } finally { store.connection.close(); }
 });
@@ -35,7 +35,7 @@ it('升级原有数据库时建立配对表并保留已有机器及凭据', asyn
     } finally { connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 6 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 7 });
       expect(upgraded.all('SELECT * FROM machine_pairings')).toEqual([]);
       expect(upgraded.get('SELECT name, token_hash FROM machines')).toEqual({ name: 'Existing Mac', token_hash: sha256(token) });
     } finally { upgraded.connection.close(); }
@@ -61,17 +61,64 @@ it('升级三版数据库保留领取目录和会话，旧尝试的实际现场�
     } finally { prior.connection.close(); }
     const upgraded = openStore(path);
     try {
-      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 6 });
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 7 });
       expect(upgraded.get('SELECT priority, difficulty, created_at FROM tasks WHERE id=?', 'task'))
         .toEqual({ priority: 'normal', difficulty: 'unassessed', created_at: 100 });
       expect(() => upgraded.run("UPDATE tasks SET priority='urgent' WHERE id='task'")).toThrow(/CHECK/);
       expect(() => upgraded.run("UPDATE tasks SET difficulty=NULL WHERE id='task'")).toThrow(/NOT NULL/);
+      expect(upgraded.get('SELECT git_base_branch,git_sync_before_start,git_version FROM projects')).toEqual({
+        git_base_branch: null, git_sync_before_start: 1, git_version: 1,
+      });
+      expect(upgraded.get('SELECT base_branch FROM tasks')).toEqual({ base_branch: null });
+      expect(upgraded.all('SELECT * FROM task_git')).toEqual([]);
       expect(upgraded.get('SELECT * FROM attempts WHERE id=?', 'attempt')).toMatchObject({
         workspace_path: '/work/registered', session_id: 'launcher-session', confirmed_workspace_path: null,
         confirmed_git_kind: null, confirmed_git_branch: null, confirmed_session_id: null, confirmed_session_file: null,
         session_locator: null, resumed_from_attempt_id: null,
       });
     } finally { upgraded.connection.close(); }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+it('完整六版库升级七版保留 Git 配置、快照和创建时间，新增属性使用默认值', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-steward-attributes-migration-'));
+  const path = join(directory, 'steward.sqlite');
+  const snapshot = JSON.stringify({ baseBranch: 'release', baseCommit: 'a'.repeat(40), taskBranch: 'feature/task',
+    repositoryPath: '/work/project', worktreePath: null, machineId: randomUUID(), syncBeforeStart: false,
+    syncResult: 'disabled', phase: 'prepared', operationId: null, deliveryId: null,
+    approvedCommit: null, mergedCommit: null, message: null });
+  try {
+    const prior = new Store(new DatabaseSync(path));
+    try {
+      for (const file of ['0001-initial.sql', '0002-machine-pairing.sql', '0003-discussion-and-reply-waits.sql',
+        '0004-attempt-workspace.sql', '0005-session-control.sql', '0006-git-lifecycle.sql']) {
+        prior.connection.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), 'utf8'));
+      }
+      prior.connection.exec('PRAGMA user_version=6; PRAGMA foreign_keys=ON');
+      prior.run(`INSERT INTO projects (id,name,created_at,git_base_branch,git_sync_before_start,git_version)
+        VALUES ('project','Project',100,'main',0,3)`);
+      prior.run(`INSERT INTO tasks (id,project_id,title,goal,acceptance,notes,agent,status,position,created_by,
+        created_at,updated_at,base_branch,git_sync_before_start)
+        VALUES ('task','project','Task','','','','pi','running',1,'user',100,200,'release',0)`);
+      prior.run('INSERT INTO task_git (task_id,snapshot) VALUES (?,?)', 'task', snapshot);
+    } finally { prior.connection.close(); }
+    const upgraded = openStore(path);
+    try {
+      expect(upgraded.get('PRAGMA user_version')).toEqual({ user_version: 7 });
+      expect(upgraded.get('SELECT git_base_branch,git_sync_before_start,git_version FROM projects')).toEqual({
+        git_base_branch: 'main', git_sync_before_start: 0, git_version: 3,
+      });
+      expect(upgraded.get('SELECT snapshot FROM task_git WHERE task_id=?', 'task')).toEqual({ snapshot });
+      expect(upgraded.get('SELECT base_branch,git_sync_before_start,created_at,updated_at,priority,difficulty FROM tasks')).toEqual({
+        base_branch: 'release', git_sync_before_start: 0, created_at: 100, updated_at: 200,
+        priority: 'normal', difficulty: 'unassessed',
+      });
+    } finally { upgraded.connection.close(); }
+    const reopened = openStore(path);
+    try {
+      expect(reopened.get('PRAGMA user_version')).toEqual({ user_version: 7 });
+      expect(reopened.get('SELECT snapshot FROM task_git WHERE task_id=?', 'task')).toEqual({ snapshot });
+    } finally { reopened.connection.close(); }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

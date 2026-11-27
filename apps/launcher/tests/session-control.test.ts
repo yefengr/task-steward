@@ -62,7 +62,7 @@ function fixture(extraArgs: string[] = []) {
     return { ok: true };
   });
   const start = () => new Launcher({ config, version: 'test', state: loadState(file), save: (state) => saveState(file, state),
-    platform: { heartbeat, claim, report, reportSession }, tmux, now: () => wall, monotonicNow: () => now });
+    platform: { heartbeat, claim, report, reportSession, reportGit: vi.fn() }, tmux, now: () => wall, monotonicNow: () => now });
   return { file, id, path, locator, attemptId, replacementId, oldTarget, newTarget, writeHeader, stop, resume, cleanup,
     sessions, live, tmux, cancel, claim, heartbeat, report, reportSession, inspect, panePid, processStatus, hasResumeIdentity, launchResume, start,
     advance: (ms: number) => { now += ms; }, advanceWall: (ms: number) => { wall += ms; },

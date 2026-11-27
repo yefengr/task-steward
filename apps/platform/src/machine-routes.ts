@@ -5,6 +5,7 @@ import * as c from '@pi-steward/contract';
 import { jsonInput, routeParam } from './app.js';
 import { requireMachineAuth } from './auth.js';
 import { reject } from './errors.js';
+import { gitDirectives, prepareGit, reportGit } from './git-lifecycle.js';
 import { claim, exited, heartbeat, started } from './execution.js';
 import { addDecision, addProgress, addQuestion, agentContext, agentControl, confirmWorkspace, deliver, recordReply, updateQuestion } from './reports.js';
 import { reportSessionOperation, requireNoPendingSessionOperation, saveAgentSession, sessionDirectives } from './session-control.js';
@@ -40,6 +41,8 @@ export function mountMachineRoutes(store: Store, now: () => number) {
   };
   api.post('/launcher/heartbeat', launcherWrite('heartbeat', c.launcherHeartbeatRequestSchema, c.launcherHeartbeatResponseSchema,
     (machineId, body, time) => heartbeat(store, machineId, body, time), undefined, (response, machineId, time) => {
+      const issuedGit = new Map(response.gitOperations?.map(({ id, phase }) => [id, phase]));
+      response = { ...response, ...(response.gitOperations ? { gitOperations: gitDirectives(store, machineId).filter(({ id, phase }) => issuedGit.get(id) === phase) } : {}) };
       if (!response.sessionOperations) return response;
       // 幂等重放不延长相对权限，也不返回已完成或已转阶段的旧权限。
       const issued = new Map(response.sessionOperations.map(({ id, step }) => [id, step]));
@@ -54,6 +57,9 @@ export function mountMachineRoutes(store: Store, now: () => number) {
     (_machineId, body, time, attempt) => exited(store, attempt, body, time), 'attempt'));
   api.post('/launcher/session-operations/:id/report', launcherWrite('session_report', c.launcherSessionReportSchema, c.okResponseSchema,
     (machineId, body, time, _attempt, target) => reportSessionOperation(store, machineId, target, body, time), 'session'));
+
+  api.post('/launcher/git-operations/:id/report', launcherWrite('git_report', c.launcherGitReportSchema, c.okResponseSchema,
+    (machineId, body, time, _attempt, target) => reportGit(store, machineId, target, body, time), 'session'));
 
   api.get('/agent/context', (context) => {
     const machineId = authenticate(context);
@@ -85,6 +91,8 @@ export function mountMachineRoutes(store: Store, now: () => number) {
     });
     return context.json(response as object);
   };
+  api.post('/agent/git/prepare', agentWrite('git_prepare', c.agentPrepareGitRequestSchema, c.agentPrepareGitResponseSchema,
+    (attempt, body) => prepareGit(store, attempt, body)));
   api.post('/agent/session', agentWrite('session', c.agentSessionRequestSchema, c.okResponseSchema,
     (attempt, body, time) => saveAgentSession(store, attempt, body.locator, time)));
   api.post('/agent/workspace', agentWrite('workspace', c.agentWorkspaceRequestSchema, c.okResponseSchema,

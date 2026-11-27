@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { GitLifecycle } from './git-lifecycle.js';
 import { HEARTBEAT_INTERVAL_MS } from '@pi-steward/contract';
 import type { LauncherHeartbeatResponse, LauncherSessionDirective, LocalConfig } from '@pi-steward/contract';
 import type { Platform } from './platform.js';
@@ -20,6 +21,7 @@ export class Launcher {
   private outboxBackoff = HEARTBEAT_INTERVAL_MS;
   private lastTmuxHealth: TmuxHealth = 'ready';
   private readonly control: SessionControl;
+  private readonly gitLifecycle: GitLifecycle;
   constructor(private readonly options: {
     config: LocalConfig;
     version: string;
@@ -31,6 +33,8 @@ export class Launcher {
     monotonicNow?: () => number;
     warn?: (message: string) => void;
   }) {
+    this.gitLifecycle = new GitLifecycle({ state: options.state, config: options.config, save: () => this.persist(),
+      platform: options.platform, warn: options.warn });
     this.control = new SessionControl({ state: options.state, tmux: options.tmux, save: () => this.persist(),
       now: () => this.now(), monotonicNow: () => this.monotonicNow(), extraArgs: options.config.pi.extraArgs,
       started: (record) => this.started(record), warn: options.warn });
@@ -157,7 +161,7 @@ export class Launcher {
     const attempts = await this.observe();
     const requestStartedAt = { wall: this.now(), monotonic: this.monotonicNow() };
     const response = await this.retryable(() => this.options.platform.heartbeat({
-      requestId: randomUUID(), launcherVersion: this.options.version, sessionControl: true,
+      requestId: randomUUID(), launcherVersion: this.options.version, sessionControl: true, gitLifecycle: true,
       slots: this.options.config.slots, projects: this.options.config.projects, attempts,
     }));
     if (!response) return;
@@ -266,6 +270,8 @@ export class Launcher {
       if (record.phase === 'exited' && !pending.has(record.id)) this.remove(record.id);
       else if (record.phase === 'prepared' && await this.options.tmux.inspect(record.target) === 'absent') this.remove(record.id);
     }
+    const gitBusy = claimPending || response.directives.length > 0 || operations.length > 0 || this.state.outbox.length > 0;
+    for (const operation of response.gitOperations ?? []) await this.gitLifecycle.apply(operation, gitBusy);
   }
 
   private async claim() {

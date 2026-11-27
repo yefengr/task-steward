@@ -7,8 +7,10 @@ import { api } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { projectPath, taskPath } from '../lib/paths';
 import { useResource } from '../lib/resource';
-import { Empty, ErrorNotice, Loading, StatusChip, TaskFlags, TaskTypeLabel, WaitReason } from './common';
+import { Empty, ErrorNotice, GitPhaseChip, Loading, StatusChip, TaskFlags, TaskTypeLabel, WaitReason } from './common';
 import { TaskAttributes, TaskCreatedAt } from './task-attributes';
+import { ProjectGitSettings } from './project-git-settings';
+import { isIntegrationPhase } from '../lib/git';
 
 const openGroups = ['running', 'review', 'interrupted', 'queued', 'unscheduled'] as const;
 const closedGroups = ['done', 'cancelled'] as const;
@@ -30,13 +32,14 @@ function TaskRow({ task, machines }: { task: Task; machines: WebMachine[] }) {
   const machine = machines.find((machine) => machine.id === task.machineId);
   return <Link href={taskPath(task.id)} className="row">
     <span className="row-title">{task.title}</span>
-    <span className="row-side"><StatusChip status={task.status} /><TaskFlags task={task} /></span>
+    <span className="row-side"><StatusChip task={task} />{task.git && <GitPhaseChip git={task.git} />}<TaskFlags task={task} /></span>
     <span className="row-sub">
       <TaskTypeLabel task={task} />
       <TaskAttributes task={task} />
       <TaskCreatedAt task={task} short />
       <span>{task.agent === 'pi' ? 'Pi' : t.form.claude}</span>
       {machine && <span>{machine.name}</span>}
+      {task.git && <span>{t.git.branchPair.replace('{base}', task.git.baseBranch).replace('{task}', task.git.taskBranch)}</span>}
       {task.createdBy === 'agent' && <span>{t.task.createdByAgent}</span>}
       {task.reworkPending && <span>{t.task.reworkPending}</span>}
       {task.status === 'queued' && <WaitReason task={task} />}
@@ -49,13 +52,18 @@ function TaskGroup({ status, tasks, machines, fold, projectId }: { status: TaskS
   const [expanded, setExpanded] = useTaskViewState(`group:${projectId}:${status}`, false);
   const rows = tasks.filter((task) => task.status === status);
   if (!rows.length) return null;
-  const title = <>{t.statuses[status]}<span className="muted count">{rows.length}</span></>;
+  // review 组同时包含待验收与已验收待集成任务，标题不能一概写成「待验收」。
+  const label = status === 'review' && rows.some((task) => task.git && isIntegrationPhase(task.git.phase))
+    ? t.git.reviewGroup : t.statuses[status];
+  const title = <>{label}<span className="muted count">{rows.length}</span></>;
   const list = <div className="list">{rows.map((task) => <TaskRow key={task.id} task={task} machines={machines} />)}</div>;
   if (fold) return <details className="task-group" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}><summary className="group-head"><ChevronRight size={16} />{title}</summary>{list}</details>;
-  return <section className="task-group" aria-label={t.statuses[status]}><h2 className="group-head">{title}</h2>{list}</section>;
+  return <section className="task-group" aria-label={label}><h2 className="group-head">{title}</h2>{list}</section>;
 }
 
-export function Project({ id, machines }: { id: string; machines: WebMachine[] }) {
+export function Project({ id, project, machines, onGitSettingsChanged }: {
+  id: string; project?: WebProject; machines: WebMachine[]; onGitSettingsChanged: () => void;
+}) {
   const { t } = useI18n();
   const { data, error, refresh } = useResource((signal) => api.projectTasks(id, signal));
   const [scroll, setScroll] = useTaskViewState(`scroll:${id}`, 0);
@@ -81,6 +89,7 @@ export function Project({ id, machines }: { id: string; machines: WebMachine[] }
     .map((machine) => machine.name);
   return <>
     <p className="project-machine muted">{names.length ? `${t.project.machines} · ${names.join(' · ')}` : t.project.noMachines}</p>
+    {project && <ProjectGitSettings key={id} project={project} onChanged={onGitSettingsChanged} />}
     <ErrorNotice error={error} retry={refresh} />
     {!data && !error && <Loading />}
     {data && (data.tasks.length ? <>

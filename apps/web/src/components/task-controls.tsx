@@ -9,6 +9,7 @@ import { nonEmptyTextSchema } from '@pi-steward/contract';
 import type { Attempt, Delivery, Task, WebSessionOperation, WebSessionOperationRequest } from '@pi-steward/contract';
 import { api } from '../lib/api';
 import type { TaskAction } from '../lib/api';
+import { isGitOperationActive, isGitRetryBlocked, isIntegrationPhase } from '../lib/git';
 import { useI18n } from '../lib/i18n';
 import { ErrorNotice } from './common';
 
@@ -35,6 +36,7 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
   const [busy, setBusy] = useTaskViewState(`action-busy:${task.id}`, false);
   const [ending, setEnding] = useTaskViewState(`ending:${task.id}`, false);
   const [endRequestedFor, setEndRequestedFor] = useTaskViewState<string | undefined>(`ended:${task.id}`, undefined);
+  const [retryingGit, setRetryingGit] = useTaskViewState(`retry-git:${task.id}`, false);
   const activeAttemptId = latestAttempt?.endedAt === null ? latestAttempt.id : undefined;
   const endRequested = activeAttemptId !== undefined && endRequestedFor === activeAttemptId;
   const closed = task.status === 'done' || task.status === 'cancelled';
@@ -42,7 +44,11 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
   const canEndDiscussion = task.type === 'discussion' && task.status === 'running' && Boolean(activeAttemptId)
     && !task.discussionEndRequested && !endRequested;
   const pending = sessionOperation?.status === 'pending';
-  const sessionAction = task.agent === 'pi' && latestAttempt?.agent === 'pi' && !latestAttempt.cancelRequested
+  const git = task.git;
+  const gitActive = isGitOperationActive(git);
+  const acceptedIntegration = Boolean(git && isIntegrationPhase(git.phase));
+  const retryBlocked = isGitRetryBlocked(git);
+  const sessionAction = task.agent === 'pi' && latestAttempt?.agent === 'pi' && !latestAttempt.cancelRequested && !gitActive
     ? task.status === 'interrupted' && latestAttempt.endedAt !== null ? 'restore'
       : task.status === 'running' && latestAttempt.endedAt === null && latestAttempt.startedAt !== null &&
         !task.discussionEndRequested && !endRequested ? 'restart' : undefined
@@ -67,6 +73,17 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
     catch (error) { setError(error); }
     finally { setEnding(false); onChanged(); }
   }
+  async function retryGit() {
+    if (retryingGit || busy) return;
+    setRetryingGit(true);
+    setError(undefined);
+    try {
+      await api.retryGit(task.id);
+      // 成功后重试按钮会被集成状态替换，焦点交给仍存在的集成标题。
+      document.querySelector<HTMLElement>('.git-section h2')?.focus();
+    } catch (error) { setError(error); }
+    finally { setRetryingGit(false); onChanged(); }
+  }
   return <>
     {!closed && <div className="action-bar">
       {sessionAction === 'restore' && !pending && <Button disabled={busy} onClick={confirmSessionAction}>{t.actions.restore}</Button>}
@@ -74,15 +91,20 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
         onClick={() => void execute(primary)}>{t.actions[primary]}</Button>}
       {canEndDiscussion && <Button loading={ending} disabled={busy || pending}
         onClick={() => void endDiscussion()}>{t.actions.endDiscussion}</Button>}
-      {task.status === 'review' && delivery?.review === null && <>
+      {task.status === 'review' && delivery?.review === null && !acceptedIntegration && <>
         <Button onClick={() => setConfirmation({ action: 'accept', delivery })}>{t.actions.accept} · v{delivery.version}</Button>
         <Button variant="default" onClick={() => setConfirmation({ action: 'rework', delivery })}>{t.actions.rework}</Button>
       </>}
+      {retryBlocked && <Button loading={retryingGit} disabled={busy}
+        onClick={() => void retryGit()}>{git?.phase === 'merge_blocked' ? t.git.retryMerge : t.git.retryCleanup}</Button>}
+      {retryBlocked && <p className="action-hint muted small">
+        {git?.phase === 'merge_blocked' ? t.git.retryMergeHint : t.git.retryCleanupHint}</p>}
+      {gitActive && <p className="action-hint muted small">{t.git.locked}</p>}
       <div className="task-management"><p>{t.task.management}</p><Group gap="xs">
       {sessionAction === 'restart' && !pending && <Button variant="outline" disabled={busy || ending}
         onClick={confirmSessionAction}>{t.actions.restart}</Button>}
       <Button variant="transparent" disabled={busy} onClick={onEdit}>{t.common.editTask}</Button>
-      <Button variant="outline" disabled={busy || ending || (pending && !sessionOperation.needsExitVerification)}
+      <Button variant="outline" disabled={busy || ending || gitActive || (pending && !sessionOperation.needsExitVerification)}
         onClick={() => setConfirmation({ action: 'cancel' })}>{t.actions.cancel}</Button>
       </Group></div>
     </div>}

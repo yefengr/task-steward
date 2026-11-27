@@ -5,6 +5,10 @@ import { piSessionIdSchema } from './session-control.js';
 export const titleSchema = z.string().trim().min(1).max(500);
 export const taskTypeSchema = z.enum(['discussion', 'implementation']);
 export type TaskType = z.infer<typeof taskTypeSchema>;
+export const taskPrioritySchema = z.enum(['high', 'normal', 'low']);
+export type TaskPriority = z.infer<typeof taskPrioritySchema>;
+export const taskDifficultySchema = z.enum(['unassessed', 'simple', 'medium', 'complex']);
+export type TaskDifficulty = z.infer<typeof taskDifficultySchema>;
 export const attemptKindSchema = z.enum(['new', 'rework', 'resume']);
 export const attemptResultSchema = z.enum(['delivered', 'interrupted', 'cancelled']);
 export const waitingReasonSchema = z.enum([
@@ -15,6 +19,7 @@ export const slotsSchema = z.int().min(0).max(1000);
 export const taskContentSchema = z.strictObject({
   title: titleSchema, goal: textSchema, acceptance: textSchema, notes: textSchema,
   agent: agentSchema, machineId: uuidSchema.nullable(), type: taskTypeSchema,
+  priority: taskPrioritySchema, difficulty: taskDifficultySchema,
 });
 export const taskSchema = taskContentSchema.extend({
   id: uuidSchema, projectId: projectIdSchema, status: taskStatusSchema, reworkPending: z.boolean(),
@@ -22,6 +27,7 @@ export const taskSchema = taskContentSchema.extend({
   createdAt: timestampSchema, updatedAt: timestampSchema, waiting: waitingReasonSchema.nullable(),
   needsVerification: z.boolean(), needsResponse: z.boolean(), discussionEndRequested: z.boolean().default(false),
   type: taskTypeSchema.default('implementation'),
+  priority: taskPrioritySchema.default('normal'), difficulty: taskDifficultySchema.default('unassessed'),
 });
 export const attemptSchema = z.strictObject({
   id: uuidSchema, taskId: uuidSchema, machineId: uuidSchema, machineName: z.string(), agent: agentSchema,

@@ -8,6 +8,7 @@ import { useI18n } from '../lib/i18n';
 import { projectPath, taskPath } from '../lib/paths';
 import { useResource } from '../lib/resource';
 import { Empty, ErrorNotice, Loading, StatusChip, TaskFlags, TaskTypeLabel, WaitReason } from './common';
+import { TaskAttributes, TaskCreatedAt } from './task-attributes';
 
 const openGroups = ['running', 'review', 'interrupted', 'queued', 'unscheduled'] as const;
 const closedGroups = ['done', 'cancelled'] as const;
@@ -32,6 +33,8 @@ function TaskRow({ task, machines }: { task: Task; machines: WebMachine[] }) {
     <span className="row-side"><StatusChip status={task.status} /><TaskFlags task={task} /></span>
     <span className="row-sub">
       <TaskTypeLabel task={task} />
+      <TaskAttributes task={task} />
+      <TaskCreatedAt task={task} short />
       <span>{task.agent === 'pi' ? 'Pi' : t.form.claude}</span>
       {machine && <span>{machine.name}</span>}
       {task.createdBy === 'agent' && <span>{t.task.createdByAgent}</span>}

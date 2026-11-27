@@ -13,12 +13,13 @@ export function createTask(store: Store, input: WebCreateTaskRequest, now: numbe
   if (input.machineId) requireMachine(store, input.machineId);
   const id = randomUUID();
   const actor = source ? 'agent' : 'user';
-  store.run(`INSERT INTO tasks (id, project_id, title, goal, acceptance, notes, agent, machine_id, type,
+  store.run(`INSERT INTO tasks (id, project_id, title, goal, acceptance, notes, agent, machine_id, type, priority, difficulty,
     status, position, created_by, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,'unscheduled',
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,'unscheduled',
       (SELECT COALESCE(MAX(position),0)+1 FROM tasks WHERE project_id=?),?,?,?)`,
   id, input.projectId, input.title, input.goal ?? '', input.acceptance ?? '', input.notes ?? '',
-  input.agent ?? 'pi', input.machineId ?? null, input.type ?? 'implementation', input.projectId, actor, now, now);
+  input.agent ?? 'pi', input.machineId ?? null, input.type ?? 'implementation', input.priority ?? 'normal', input.difficulty ?? 'unassessed',
+  input.projectId, actor, now, now);
   store.event(id, actor, null, 'created', { to: 'unscheduled', ...source }, now);
   return { task: taskView(store, requireTask(store, id), now) };
 }
@@ -46,10 +47,11 @@ export function updateTask(store: Store, id: string, input: WebUpdateTaskRequest
   if (input.agent === 'claude') reject('invalid_request', 'Claude tasks are not supported');
   if (input.machineId) requireMachine(store, input.machineId);
   const fields = Object.keys(input).filter((key) => key !== 'version');
-  store.run(`UPDATE tasks SET title=?, goal=?, acceptance=?, notes=?, agent=?, machine_id=?,
+  store.run(`UPDATE tasks SET title=?, goal=?, acceptance=?, notes=?, agent=?, machine_id=?, priority=?, difficulty=?,
     version=version+1, updated_at=? WHERE id=?`, input.title ?? task.title, input.goal ?? task.goal,
   input.acceptance ?? task.acceptance, input.notes ?? task.notes, input.agent ?? task.agent,
-  input.machineId === undefined ? task.machine_id : input.machineId, now, id);
+  input.machineId === undefined ? task.machine_id : input.machineId,
+  input.priority ?? task.priority, input.difficulty ?? task.difficulty, now, id);
   store.event(id, source ? 'agent' : 'user', null, 'updated', { fields, ...source }, now);
   return { task: taskView(store, requireTask(store, id), now) };
 }

@@ -76,6 +76,18 @@ preflight() {
   fi
 }
 
+require_host_typebox() {
+  local manifest=$1
+  jq -e '.dependencies.typebox == null' >/dev/null 2>&1 <<< "$manifest" \
+    || fail 'typebox must not be listed in dependencies; Pi provides typebox to extensions.'
+  jq -e '.optionalDependencies.typebox == null' >/dev/null 2>&1 <<< "$manifest" \
+    || fail 'typebox must not be listed in optionalDependencies; Pi provides typebox to extensions.'
+  jq -e '.peerDependencies.typebox == "*"' >/dev/null 2>&1 <<< "$manifest" \
+    || fail 'typebox must be declared as a peer dependency with version "*".'
+  jq -e '.peerDependenciesMeta.typebox.optional == true' >/dev/null 2>&1 <<< "$manifest" \
+    || fail 'typebox peer dependency must be marked optional in peerDependenciesMeta.'
+}
+
 inspect_bundle() {
   local artifact_dir=$1 manifest bundled_version
   shopt -s nullglob
@@ -87,6 +99,7 @@ inspect_bundle() {
   bundled_version=$(manifest_version "$package_name" <<< "$manifest") || fail 'Invalid package identity or version in the tarball.'
   [[ $bundled_version == "$version" && ${bundle##*/} == "yefengr-steward-$version.tgz" ]] \
     || fail 'Tarball name or version does not match the launcher version at the workflow source SHA.'
+  require_host_typebox "$manifest"
   digest=$(shasum -a 256 < "$bundle")
   digest=${digest%% *}
   [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail 'Cannot determine tarball SHA-256.'

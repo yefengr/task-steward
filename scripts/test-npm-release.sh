@@ -103,9 +103,24 @@ excludes "$MOCK_LOG" 'npm '
 
 mkdir "$tmp/artifacts" "$tmp/package"
 bundle="$tmp/artifacts/yefengr-steward-$CURRENT_VERSION.tgz"
-pack_fixture() {
-  printf '{"name":"%s","version":"%s"}\n' "$1" "$2" > "$tmp/package/package.json"
+manifest_fixture() {
+  jq -cn --arg name "$1" --arg version "$2" '{
+    name: $name,
+    version: $version,
+    dependencies: { zod: "4.6.6" },
+    peerDependencies: { typebox: "*" },
+    peerDependenciesMeta: { typebox: { optional: true } }
+  }'
+}
+pack_manifest() {
+  printf '%s\n' "$1" > "$tmp/package/package.json"
   tar -czf "$bundle" -C "$tmp" package/package.json
+}
+pack_fixture() { pack_manifest "$(manifest_fixture "$1" "$2")"; }
+tarball_digest() {
+  local checksum
+  checksum=$(shasum -a 256 < "$bundle")
+  printf '%s\n' "${checksum%% *}"
 }
 pack_fixture @not-steward/tool "$CURRENT_VERSION"
 run 1 inspect "$tmp/artifacts"
@@ -113,6 +128,24 @@ contains "$tmp/result" 'Invalid package identity or version'
 pack_fixture @yefengr/steward "$PREVIOUS_VERSION"
 run 1 inspect "$tmp/artifacts"
 contains "$tmp/result" 'does not match the launcher version'
+
+typebox_gate_case() {
+  local scenario=$1 filter=$2 expected=$3
+  pack_manifest "$(manifest_fixture @yefengr/steward "$CURRENT_VERSION" | jq -c "$filter")"
+  run 1 inspect "$tmp/artifacts"
+  contains "$tmp/result" "$expected"
+  run 1 stage "$tmp/artifacts" "$(tarball_digest)"
+  contains "$tmp/result" "$expected"
+  excludes "$MOCK_LOG" 'npm stage publish '
+  printf 'Rejected typebox manifest: %s\n' "$scenario"
+}
+typebox_gate_case 'production dependency' '.dependencies.typebox = "1.3.27"' 'must not be listed in dependencies'
+typebox_gate_case 'optional production dependency' '.optionalDependencies.typebox = "1.3.27"' 'must not be listed in optionalDependencies'
+typebox_gate_case 'missing peer dependency' 'del(.peerDependencies.typebox)' 'must be declared as a peer dependency with version "*"'
+typebox_gate_case 'exact peer version' '.peerDependencies.typebox = "1.3.27"' 'must be declared as a peer dependency with version "*"'
+typebox_gate_case 'missing optional peer metadata' 'del(.peerDependenciesMeta)' 'must be marked optional'
+typebox_gate_case 'non-optional peer metadata' '.peerDependenciesMeta.typebox.optional = false' 'must be marked optional'
+
 pack_fixture @yefengr/steward "$CURRENT_VERSION"
 STEWARD_NPM_HOLD_VERSION=$CURRENT_VERSION run 0 inspect "$tmp/artifacts"
 IFS= read -r digest_line < "$GITHUB_OUTPUT"

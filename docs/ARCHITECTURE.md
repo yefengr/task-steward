@@ -10,7 +10,7 @@ Task Steward 是任务台账与 Mac 启动器，不是中心 Agent。平台不�
 - Mac 启动器主动向平台心跳、领取、续租和报告退出，无需开放 Mac 公网端口。
 - 启动器在独立的 tmux server `steward` 中启动交互式 Pi。Pi 扩展直接向平台读取任务与回报。
 - 对话仍在 Pi Reach 或本机终端完成。任务链路不替代 Pi Reach 的配对、Relay 和会话存储。
-- 当前执行端只接 Pi。Claude Code、Web Push、依赖调度与验收积压门禁仍是 [BACKLOG](BACKLOG.md) 中的候选，不能从旧方案的完整产品设计推定已实现。
+- 当前执行端只接 Pi。Claude Code、Web Push 与依赖调度仍是 [BACKLOG](BACKLOG.md) 中的候选，不能从旧方案的完整产品设计推定已实现。
 
 ## 2. 模块及直接消费者
 

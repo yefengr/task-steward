@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { registerAttemptControl } from '../src/attempt-control.js';
 import { AgentError, agentClient } from '../src/client.js';
 
-function fixture(type: AgentControlResponse['type'] = 'discussion') {
+function fixture(type: AgentControlResponse['type'] = 'discussion', continuation = false) {
   vi.useFakeTimers();
   const state: AgentControlResponse = { type, waitId: null, discussionEndRequested: false, deliverySaved: false };
   const handlers = vi.fn<ExtensionAPI['on']>();
@@ -32,7 +32,7 @@ function fixture(type: AgentControlResponse['type'] = 'discussion') {
   function register() {
     handlers.mockClear();
     return registerAttemptControl({ on: handlers, sendMessage, appendEntry } as unknown as ExtensionAPI,
-      attemptId, request as unknown as ReturnType<typeof agentClient>);
+      attemptId, request as unknown as ReturnType<typeof agentClient>, false, continuation);
   }
   const control = register();
   async function fire(name: string, event = {}) {
@@ -47,6 +47,37 @@ function fixture(type: AgentControlResponse['type'] = 'discussion') {
 }
 
 afterEach(() => vi.useRealTimers());
+
+it('后台接续等待平台启动及加载确认，空闲后仅一次发送；reload 不重放', async () => {
+  const f = fixture('implementation', true);
+  f.state.continuationReady = false;
+  await f.start(); await f.tick(10_000);
+  expect(f.sendMessage).not.toHaveBeenCalled();
+  f.state.continuationReady = true; f.isIdle.mockReturnValue(false);
+  await f.tick(); expect(f.sendMessage).not.toHaveBeenCalled();
+  f.isIdle.mockReturnValue(true); await f.tick();
+  expect(f.sendMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ customType: 'steward-background-continue' }),
+    { triggerTurn: true, deliverAs: 'followUp' });
+  await f.tick(20_000); await f.fire('session_shutdown'); f.register(); await f.start();
+  expect(f.sendMessage).toHaveBeenCalledTimes(1);
+  await f.fire('session_shutdown');
+});
+it('用户先输入时不在其后追加自动接续，发送结果未知也不重复消息', async () => {
+  const f = fixture('implementation', true);
+  f.state.continuationReady = false; await f.start();
+  await f.fire('input', { source: 'interactive', text: '先等一下，我来核对' });
+  f.state.continuationReady = true; await f.tick();
+  expect(f.sendMessage).not.toHaveBeenCalled(); await f.fire('session_shutdown');
+  const g = fixture('implementation', true); g.state.continuationReady = true;
+  g.sendMessage.mockImplementationOnce(() => { throw new Error('unknown'); });
+  await g.start(); await g.tick(20_000);
+  expect(g.sendMessage).toHaveBeenCalledTimes(1); expect(g.notify).toHaveBeenCalledWith(expect.stringContaining('未重复发送'), 'warning');
+  await g.fire('session_shutdown');
+});
+it('普通恢复即使收到 ready 字段也不自动发消息', async () => {
+  const f = fixture('implementation'); f.state.continuationReady = true; await f.start(); await f.tick(10_000);
+  expect(f.sendMessage).not.toHaveBeenCalled(); await f.fire('session_shutdown');
+});
 
 it('普通回合保持讨论运行，工作台请求在 Pi 空闲后只触发一次，并等平台确认交付', async () => {
   const f = fixture();

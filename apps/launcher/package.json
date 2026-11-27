@@ -9,6 +9,6 @@
     "test": "vitest run",
     "start": "node dist/index.js"
   },
-  "dependencies": { "@pi-steward/contract": "workspace:*", "@pi-steward/platform-http": "workspace:*", "zod": "catalog:" },
+  "dependencies": { "@pi-steward/execution-runtime": "workspace:*", "@pi-steward/contract": "workspace:*", "@pi-steward/platform-http": "workspace:*", "zod": "catalog:" },
   "devDependencies": { "@types/node": "catalog:", "typescript": "catalog:", "vitest": "catalog:" }
 }

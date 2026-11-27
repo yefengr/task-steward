@@ -110,7 +110,7 @@ it.each(['started first', 'loaded first'])('同机替换需要 started 和严格
   const next = afterStop.attempts.at(-1)!;
   expect(next).toMatchObject({ kind: 'resume', sessionId: locator.sessionId, machineId: x.machineId });
   expect(x.store.get('SELECT kind, session_id, confirmed_git_kind FROM attempts WHERE id=?', next.id)).toMatchObject({
-    kind: 'new', session_id: source.sessionId, confirmed_git_kind: 'linked',
+    kind: 'new', session_id: locator.sessionId, confirmed_git_kind: 'linked',
   });
   const context = await x.agent(next.id, '/context');
   expect(context.status).toBe(200);

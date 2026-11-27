@@ -18,7 +18,8 @@ export const agentContextResponseSchema = z.strictObject({
   task: taskContentSchema.pick({ title: true, goal: true, acceptance: true, notes: true }).extend({
     id: uuidSchema, projectId: projectIdSchema, type: taskTypeSchema.default('implementation'),
   }),
-  attempt: z.strictObject({ id: uuidSchema, kind: attemptKindSchema }),
+  attempt: z.strictObject({ id: uuidSchema, kind: attemptKindSchema,
+    executionMode: z.enum(['foreground', 'background']).default('background') }),
   gitSettings: resolvedGitSettingsSchema.optional(), git: taskGitSchema.nullable().optional(),
   workspace: z.strictObject({
     path: z.string(), requirements: z.array(nonEmptyTextSchema),
@@ -31,6 +32,7 @@ export const agentContextResponseSchema = z.strictObject({
 });
 export const agentControlResponseSchema = z.strictObject({
   type: taskTypeSchema, discussionEndRequested: z.boolean(), deliverySaved: z.boolean(), waitId: uuidSchema.nullable(),
+  continuationReady: z.boolean().optional(),
 });
 export const agentEndDiscussionRequestSchema = requestIdSchema;
 export const agentReplyRequestSchema = requestIdSchema.extend({ waitId: uuidSchema });

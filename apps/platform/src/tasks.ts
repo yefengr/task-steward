@@ -20,7 +20,7 @@ export function createTask(store: Store, input: WebCreateTaskRequest, now: numbe
       (SELECT COALESCE(MAX(position),0)+1 FROM tasks WHERE project_id=?),?,?,?)`,
   id, input.projectId, input.title, input.goal ?? '', input.acceptance ?? '', input.notes ?? '',
   input.agent ?? 'pi', input.machineId ?? null, input.type ?? 'implementation', input.projectId, actor, now, now);
-  store.run('UPDATE tasks SET base_branch=? WHERE id=?', input.baseBranch ?? null, id);
+  store.run("UPDATE tasks SET base_branch=?, origin='task_board' WHERE id=?", input.baseBranch ?? null, id);
   store.event(id, actor, null, 'created', { to: 'unscheduled', ...source }, now);
   return { task: taskView(store, requireTask(store, id), now) };
 }

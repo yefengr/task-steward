@@ -6,7 +6,7 @@ import { useTaskViewState } from '../lib/task-view-state';
 import { isValidDialogFocus } from '../lib/dialog-focus';
 import { useI18n } from '../lib/i18n';
 import { projectPath } from '../lib/paths';
-import { GitPhaseChip, StatusChip, TaskFlags, TaskTypeLabel, WaitReason } from './common';
+import { GitPhaseChip, StatusChip, TaskFlags, TaskTypeLabel, TaskOriginLabel, WaitReason } from './common';
 import { GitSection } from './git-section';
 import { TaskControls } from './task-controls';
 import { TaskForm } from './task-form';
@@ -30,11 +30,11 @@ function Attention({ detail }: { detail: WebTaskDetailResponse }) {
     </article>)}
     {pending && <p role="status" className={`callout${sessionOperation.needsExitVerification ? ' warning' : ''}`}>
       {sessionOperation.needsExitVerification ? t.session.verifyingExit : t.session.pending[sessionOperation.mode]}</p>}
-    {resumed && <p role="status" className="callout">{t.session.ready}</p>}
+    {resumed && <p role="status" className="callout">{sessionOperation?.mode === 'background' ? t.session.continuingReady : t.session.ready}</p>}
     {failure && <p role="alert" className="callout warning">{t.session.failures[failure]}</p>}
     {task.needsVerification && !pending && <p className="callout warning">{t.task.verificationHint}</p>}
     {task.status === 'interrupted' && !pending && <p className="callout warning">
-      {task.agent === 'pi' && detail.attempts.at(-1)?.agent === 'pi' ? t.session.interrupted : t.task.interruptedHint}</p>}
+      {task.agent === 'pi' && detail.attempts.at(-1)?.agent === 'pi' ? detail.attempts.at(-1)?.executionMode === 'foreground' ? t.session.foregroundInterrupted : t.session.interrupted : t.task.interruptedHint}</p>}
   </section>;
 }
 
@@ -101,7 +101,7 @@ export default function TaskDetail({ detail, project, machines, onChanged }: {
     <header className="detail-head">
       <h1 className="user-text">{task.title}</h1>
       <div className="meta-line">
-        <StatusChip task={task} />{task.git && <GitPhaseChip git={task.git} />}<TaskFlags task={task} /><TaskTypeLabel task={task} />
+        <StatusChip task={task} />{task.git && <GitPhaseChip git={task.git} />}<TaskFlags task={task} /><TaskTypeLabel task={task} /><TaskOriginLabel task={task} />
         <span>{t.form.agent} · {task.agent === 'pi' ? 'Pi' : t.form.claude}</span>
         <span>{t.form.machine} · {machineName}</span>
         {task.createdBy === 'agent' && <span>{t.task.createdByAgent}</span>}

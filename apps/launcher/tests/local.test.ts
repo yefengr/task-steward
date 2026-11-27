@@ -52,6 +52,17 @@ it('恢复命令不携带新会话 ID、名称或消息；只使用原文件和�
     '-e', '/mock/extension\\;', '-e', '/mock/steward', '--session', '/mock/old session\\;']);
 });
 
+it('后台接续只传模式标记，不在原会话加载确认前通过启动 argv 发指令', async () => {
+  type Runner = NonNullable<Parameters<typeof tmuxClient>[1]['run']>;
+  const run = vi.fn().mockResolvedValue({ stdout: '123\n', stderr: '' });
+  const tmux = tmuxClient(config, { configPath: '/mock/config', extensionPath: '/mock/steward', run: run as Runner, env: {} });
+  const id = randomUUID();
+  await tmux.launchResume(targetFor(id), id, { path: '/mock/project', sessionId: randomUUID(), sessionFile: '/mock/session.jsonl' }, true);
+  const args = run.mock.lastCall?.[1] as string[];
+  expect(args).toContain('STEWARD_CONTINUATION=1');
+  expect(args.slice(-2)).toEqual(['--session', '/mock/session.jsonl']);
+  expect(args.join(' ')).not.toContain('用户已请求');
+});
 it('只接受精确单 pane 的 PID', async () => {
   type Runner = NonNullable<Parameters<typeof tmuxClient>[1]['run']>;
   const target = targetFor(randomUUID());

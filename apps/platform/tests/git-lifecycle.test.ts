@@ -14,7 +14,7 @@ const preparation = { baseBranch: 'main', baseCommit, taskBranch: 'feature/task'
 const read = async <T>(schema: { parse(data: unknown): T }, response: Response): Promise<T> => schema.parse(await response.json());
 const settings = (x: Fixture, body: object) => x.web(`/projects/${project.id}/git`, body, 'PATCH');
 const pollBody = () => request({ launcherVersion: 'test', slots: 3, projects: [project], attempts: [], gitLifecycle: true });
-const poll = async (x: Fixture, body = pollBody()) => read(c.launcherHeartbeatResponseSchema, await x.launcher('/heartbeat', body));
+const poll = async (x: Fixture, body: object = pollBody()) => read(c.launcherHeartbeatResponseSchema, await x.launcher('/heartbeat', body));
 const report = (x: Fixture, id: string, body: object, machine?: string) => x.launcher(`/git-operations/${id}/report`, body, machine);
 const context = (x: Fixture, id: string) => x.agent(id, '/context').then((r) => read(c.agentContextResponseSchema, r));
 
@@ -36,6 +36,32 @@ async function accepted() {
   return { x, task, attempt, deliveryId: submitted.deliveryId };
 }
 
+it('会话占用拒绝 workspace 时，外层事务回滚已计算的 Git 现场和确认字段', async () => {
+  const { x, task, attempt } = await prepared();
+  const otherTask = await x.create(); await x.action(otherTask.id, 'schedule'); const other = await x.claimed();
+  expect((await x.agent(other.id, '/session', request({ locator: { path: '/work/other', sessionId: workspace.sessionId, sessionFile: workspace.sessionFile } }))).status).toBe(200);
+  const beforeGit = x.store.get('SELECT snapshot FROM task_git WHERE task_id=?', task.id);
+  const beforeAttempt = x.store.get('SELECT * FROM attempts WHERE id=?', attempt.id);
+  const rejected = request({ workspace });
+  await errorCode(await x.agent(attempt.id, '/workspace', rejected), 409, 'session_in_use');
+  expect(x.store.get('SELECT snapshot FROM task_git WHERE task_id=?', task.id)).toEqual(beforeGit);
+  expect(x.store.get('SELECT * FROM attempts WHERE id=?', attempt.id)).toEqual(beforeAttempt);
+  expect(x.store.get('SELECT 1 FROM request_log WHERE request_id=?', rejected.requestId)).toBeUndefined();
+});
+
+it('前台交付验收绑定源进程身份，旧启动器不能绕过普通 Pi 存活保护', async () => {
+  const { x, task, attempt } = await prepared();
+  await x.agent(attempt.id, '/workspace', request({ workspace }));
+  const submitted = await read(c.agentDeliveryResponseSchema, await x.agent(attempt.id, '/deliveries', request({ ...delivery, baseCommit, commit })));
+  const goalId = randomUUID(), ownerId = randomUUID(), pid = 12345;
+  x.store.run("UPDATE attempts SET execution_mode='foreground',goal_id=?,owner_id=?,owner_pid=? WHERE id=?", goalId, ownerId, pid, attempt.id);
+  expect((await x.action(task.id, 'accept', { deliveryId: submitted.deliveryId })).status).toBe(200);
+  expect((await x.send('/agent/foreground/settle', request(), { machine: x.token, attempt: attempt.id,
+    headers: { 'X-Steward-Owner-Id': ownerId } })).status).toBe(200);
+  expect((await poll(x)).gitOperations).toEqual([]);
+  const capable = await poll(x, { ...pollBody(), foregroundControl: true });
+  expect(capable.gitOperations?.[0]?.foregroundOwner).toEqual({ goalId, pid });
+});
 it('项目默认、版本冲突、heartbeat不覆盖设置；任务覆盖仅未启动可改，prepare冻结配置和同步结果', async () => {
   const x = await setup();
   await x.heartbeat(3);

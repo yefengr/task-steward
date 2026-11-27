@@ -5,6 +5,7 @@ import * as c from '@pi-steward/contract';
 import { jsonInput, routeParam } from './app.js';
 import { requireMachineAuth } from './auth.js';
 import { reject } from './errors.js';
+import { foregroundAction, requireForegroundOwner } from './foreground.js';
 import { gitDirectives, prepareGit, reportGit } from './git-lifecycle.js';
 import { claim, exited, heartbeat, started } from './execution.js';
 import { addDecision, addProgress, addQuestion, agentContext, agentControl, confirmWorkspace, deliver, recordReply, updateQuestion } from './reports.js';
@@ -65,12 +66,14 @@ export function mountMachineRoutes(store: Store, now: () => number) {
     const machineId = authenticate(context);
     const attempt = ownedAttempt(store, attemptHeader(context), machineId);
     requireLiveAttempt(store, attempt);
+    requireForegroundOwner(store, attempt, context.req.header('X-Steward-Owner-Id'), now());
     return context.json(c.agentContextResponseSchema.parse(agentContext(store, attempt)));
   });
   api.get('/agent/control', (context) => {
     const machineId = authenticate(context);
     const attempt = ownedAttempt(store, attemptHeader(context), machineId);
     requireLiveAttempt(store, attempt);
+    requireForegroundOwner(store, attempt, context.req.header('X-Steward-Owner-Id'), now());
     return context.json(c.agentControlResponseSchema.parse(agentControl(store, attempt)));
   });
   const agentWrite = <T extends { requestId: string }, R>(operation: string, input: z.ZodType<T>, output: z.ZodType<R>,
@@ -83,6 +86,17 @@ export function mountMachineRoutes(store: Store, now: () => number) {
       const machineId = authenticate(context);
       const attempt = ownedAttempt(store, attemptId, machineId);
       const time = now();
+      const key = { machineId, actor: 'agent' as const, operation, target: questionScoped ? `${attemptId}/${questionId}` : attemptId };
+      if (attempt.execution_mode === 'foreground' && (operation === 'foreground_settle' || operation === 'foreground_interrupt')) {
+        if (context.req.header('X-Steward-Owner-Id') !== attempt.owner_id) reject('forbidden', 'Foreground owner credentials required');
+        // 关闭回执不授予实施权限；用户先验收/返修也不应让原尝试永远无法结算。
+        if (attempt.ended_at !== null) return store.request(key, body, time,
+          () => reject('attempt_ended', 'No matching foreground close receipt'));
+        requireNoPendingSessionOperation(store, attempt.task_id, time);
+        return store.request(key, body, time, () => foregroundAction(store, attempt,
+          operation === 'foreground_settle' ? 'settle' : 'interrupt', time));
+      }
+      requireForegroundOwner(store, attempt, context.req.header('X-Steward-Owner-Id'), time);
       return store.request({ machineId, actor: 'agent', operation, target: questionScoped ? `${attemptId}/${questionId}` : attemptId }, body, time, () => {
         requireLiveAttempt(store, attempt);
         if (operation !== 'session') requireNoPendingSessionOperation(store, attempt.task_id, time);
@@ -91,6 +105,12 @@ export function mountMachineRoutes(store: Store, now: () => number) {
     });
     return context.json(response as object);
   };
+  api.post('/agent/foreground/heartbeat', agentWrite('foreground_heartbeat', c.foregroundHeartbeatRequestSchema, c.okResponseSchema,
+    (attempt, _body, time) => foregroundAction(store, attempt, 'heartbeat', time)));
+  api.post('/agent/foreground/settle', agentWrite('foreground_settle', c.foregroundSettleRequestSchema, c.okResponseSchema,
+    (attempt, _body, time) => foregroundAction(store, attempt, 'settle', time)));
+  api.post('/agent/foreground/interrupt', agentWrite('foreground_interrupt', c.foregroundInterruptRequestSchema, c.okResponseSchema,
+    (attempt, _body, time) => foregroundAction(store, attempt, 'interrupt', time)));
   api.post('/agent/git/prepare', agentWrite('git_prepare', c.agentPrepareGitRequestSchema, c.agentPrepareGitResponseSchema,
     (attempt, body) => prepareGit(store, attempt, body)));
   api.post('/agent/session', agentWrite('session', c.agentSessionRequestSchema, c.okResponseSchema,

@@ -5,6 +5,8 @@ import { gitBranchSchema, taskGitSchema } from './git-lifecycle.js';
 
 export const titleSchema = z.string().trim().min(1).max(500);
 export const taskTypeSchema = z.enum(['discussion', 'implementation']);
+export const taskOriginSchema = z.enum(['task_board', 'foreground', 'legacy']);
+export const executionModeSchema = z.enum(['foreground', 'background']);
 export type TaskType = z.infer<typeof taskTypeSchema>;
 export const attemptKindSchema = z.enum(['new', 'rework', 'resume']);
 export const attemptResultSchema = z.enum(['delivered', 'interrupted', 'cancelled']);
@@ -21,6 +23,7 @@ export const taskContentSchema = z.strictObject({
 export const taskSchema = taskContentSchema.extend({
   id: uuidSchema, projectId: projectIdSchema, status: taskStatusSchema, reworkPending: z.boolean(),
   position: z.int().positive(), createdBy: z.enum(['user', 'agent']), version: z.int().positive(),
+  origin: taskOriginSchema.default('legacy'), executionMode: executionModeSchema.nullable().default(null),
   createdAt: timestampSchema, updatedAt: timestampSchema, waiting: waitingReasonSchema.nullable(),
   needsVerification: z.boolean(), needsResponse: z.boolean(), discussionEndRequested: z.boolean().default(false),
   type: taskTypeSchema.default('implementation'), git: taskGitSchema.nullable().optional(),
@@ -28,6 +31,7 @@ export const taskSchema = taskContentSchema.extend({
 export const attemptSchema = z.strictObject({
   id: uuidSchema, taskId: uuidSchema, machineId: uuidSchema, machineName: z.string(), agent: agentSchema,
   kind: attemptKindSchema, sessionId: piSessionIdSchema, tmuxSession: tmuxSessionSchema.nullable(),
+  executionMode: executionModeSchema.default('background'),
   claimedAt: timestampSchema, startedAt: timestampSchema.nullable(), leaseExpiresAt: timestampSchema,
   cancelRequested: z.boolean(), endedAt: timestampSchema.nullable(),
   exitCode: z.int().nullable(), result: attemptResultSchema.nullable(), needsVerification: z.boolean(),

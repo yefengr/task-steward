@@ -5,7 +5,7 @@
   "engines": { "node": ">=24.20.0 <25" },
   "scripts": {
     "build:contract": "pnpm --filter @pi-steward/contract build",
-    "build:client": "pnpm --filter @pi-steward/platform-http... run build",
+    "build:client": "pnpm --filter @pi-steward/platform-http... --filter @pi-steward/execution-runtime run build",
     "typecheck": "pnpm build:client && pnpm -r --if-present run typecheck",
     "lint": "eslint . --max-warnings=0",
     "test": "pnpm build:client && pnpm -r --if-present run test",

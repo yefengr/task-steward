@@ -5,6 +5,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { LauncherSessionDirective, PiSessionLocator, SessionOperationFailure } from '@pi-steward/contract';
 import type { Execution, SessionOperation, State } from './state.js';
 import { targetFor, TmuxError } from './tmux.js';
+import { acquireExecutionLock } from '@pi-steward/execution-runtime';
+import { validateForegroundWorkspace } from './foreground-workspace.js';
 import type { Tmux } from './tmux.js';
 
 const MAX_HEADER_BYTES = 64 * 1024;
@@ -71,9 +73,11 @@ export function validateLocator(locator: PiSessionLocator): SessionOperationFail
 }
 
 export class SessionControl {
+  private readonly foregroundLocks = new Map<string, () => void>();
   constructor(private readonly options: {
     state: State; tmux: Tmux; save: () => void; now: () => number; monotonicNow: () => number;
     extraArgs: readonly string[]; started: (record: Execution) => void; warn?: (message: string) => void;
+    configFile?: string;
   }) {}
 
   private get state() { return this.options.state; }
@@ -91,6 +95,29 @@ export class SessionControl {
     op.report = failure ? { requestId: randomUUID(), result: 'failed', step: op.step, failure }
       : { requestId: randomUUID(), result: 'stopped', step: 'stop' };
     this.save();
+    if (failure) this.releaseForeground(op.id);
+  }
+
+  private releaseForeground(id: string) {
+    this.foregroundLocks.get(id)?.();
+    this.foregroundLocks.delete(id);
+  }
+
+  reconcileForegroundLocks(active: ReadonlySet<string>) {
+    for (const id of this.foregroundLocks.keys()) if (!active.has(id)) this.releaseForeground(id);
+  }
+
+  private holdForeground(op: SessionOperation) {
+    const owner = op.foregroundOwner;
+    if (!owner || !this.options.configFile) return false;
+    if (this.tmux.processStatus(owner.pid) !== 'dead') return false;
+    if (this.foregroundLocks.has(op.id)) return true;
+    try {
+      const release = acquireExecutionLock(this.options.configFile, owner.goalId);
+      if (this.tmux.processStatus(owner.pid) !== 'dead') { release(); return false; }
+      this.foregroundLocks.set(op.id, release);
+      return true;
+    } catch { return false; }
   }
 
   private definitelyDead(pid: number | undefined) {
@@ -98,6 +125,8 @@ export class SessionControl {
   }
 
   private async sourceGone(attemptId: string) {
+    const operation = this.state.sessionOperations?.find((item) => item.attemptId === attemptId && item.foregroundOwner);
+    if (operation?.foregroundOwner && !this.definitelyDead(operation.foregroundOwner.pid)) return false;
     if (await this.tmux.inspect(targetFor(attemptId)) !== 'absent') return false;
     const pid = this.record(attemptId)?.pid;
     return pid === undefined || this.definitelyDead(pid);
@@ -130,6 +159,17 @@ export class SessionControl {
   private async stop(directive: Extract<LauncherSessionDirective, { step: 'stop' }>, op: SessionOperation, valid: () => boolean) {
     const invalid = this.invalid(directive.locator);
     if (invalid) { this.finish(op, invalid); return; }
+    if (directive.mode === 'background') {
+      const owner = directive.foregroundOwner;
+      if (!owner) { this.finish(op, 'session_ownership_unavailable'); return; }
+      if (this.tmux.processStatus(owner.pid) === 'alive') { this.finish(op, 'session_source_alive'); return; }
+      if (!this.holdForeground(op)) { this.finish(op, 'session_ownership_unavailable'); return; }
+      const failure = await validateForegroundWorkspace(directive);
+      if (failure) { this.finish(op, failure); return; }
+      if (valid() && await this.sourceGone(directive.attemptId)) this.finish(op);
+      else this.finish(op, 'session_ownership_unavailable');
+      return;
+    }
     const target = targetFor(directive.attemptId);
     const existing = this.record(directive.attemptId);
     const status = await this.tmux.inspect(target);
@@ -177,6 +217,10 @@ export class SessionControl {
     if (await this.tmux.inspect(target) !== 'absent' || !await this.sourceGone(directive.attemptId)) return;
     const invalid = this.invalid(directive.locator);
     if (invalid) { op.launchIssued = false; this.finish(op, invalid); return; }
+    if (directive.mode === 'background') {
+      const failure = !this.holdForeground(op) ? 'session_ownership_unavailable' : await validateForegroundWorkspace(directive);
+      if (failure) { op.launchIssued = false; this.finish(op, failure); return; }
+    }
     if (!valid()) return;
     const record: Execution = { id, target, phase: 'launching', startedAt: this.options.now(), sessionOperationId: op.id };
     const previouslyIssued = op.launchIssued;
@@ -190,7 +234,9 @@ export class SessionControl {
       return;
     }
     try {
-      const pid = await this.tmux.launchResume(target, id, directive.locator);
+      const pid = directive.mode === 'background'
+        ? await this.tmux.launchResume(target, id, directive.locator, true)
+        : await this.tmux.launchResume(target, id, directive.locator);
       this.rememberPid(record, pid);
       if (await this.tmux.inspect(target) === 'present' && await this.tmux.panePid(target) === pid) this.options.started(record);
     } catch (error) {
@@ -253,10 +299,13 @@ export class SessionControl {
     let op = operations.find((item) => item.id === id);
     const replacementId = step === 'stop' ? undefined : directive.replacementId;
     if (op && (op.attemptId !== attemptId || (op.replacementId !== undefined && op.replacementId !== replacementId))) return;
+    if (step !== 'cleanup' && op?.foregroundOwner && (directive.foregroundOwner?.goalId !== op.foregroundOwner.goalId ||
+        directive.foregroundOwner.pid !== op.foregroundOwner.pid)) return;
     if (op && op.step !== step && (step === 'stop' || op.step === 'cleanup')) return;
     if (op?.step !== step) {
       const launchIssued = op?.launchIssued ?? (op && op.step === 'stop' ? false : undefined);
-      op = { id, attemptId, step, replacementId, launchIssued };
+      const foregroundOwner = directive.foregroundOwner ?? op?.foregroundOwner;
+      op = { id, attemptId, step, replacementId, launchIssued, ...(foregroundOwner ? { foregroundOwner } : {}) };
       const previous = operations.findIndex((item) => item.id === id);
       if (previous < 0) operations.push(op);
       else operations[previous] = op;

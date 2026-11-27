@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { DEFAULT_STEWARD_ORIGIN, HEARTBEAT_INTERVAL_MS, MACHINE_ONLINE_WINDOW_MS, localConfigSchema, platformProxySchema } from '@pi-steward/contract';
 import { configPath, readConfig } from './config.js';
+import { runExtensionCommand } from './extension-registration.js';
 import { Launcher } from './launcher.js';
 import { pairMachine } from './pairing.js';
 import { platformClient } from './platform.js';
@@ -33,7 +34,7 @@ async function run() {
     const origin = new URL(config.platformUrl).origin;
     const platform = platformClient(config);
     const launcher = new Launcher({ config, version, state: loadState(stateFile), save: (state) => saveState(stateFile, state),
-      platform, tmux: tmuxClient(config, { configPath: configFile, extensionPath }),
+      platform, tmux: tmuxClient(config, { configPath: configFile, extensionPath }), configFile,
       warn: (text) => console.error(text),
     });
     while (!stop.signal.aborted) {
@@ -113,6 +114,11 @@ async function main(command?: string, ...args: string[]) {
       console.log(`${added ? '已登记' : '已登记过'}项目「${project.name}」。后台服务运行时，项目会在下一次心跳同步。`);
       return;
     }
+    case 'extension': {
+      const config = readConfig(configFile, true);
+      console.log(await runExtensionCommand(args, { moduleUrl: import.meta.url, config }));
+      return;
+    }
     case undefined: {
       const config = readConfig(configFile, true);
       if (!config) console.log('尚未配对。运行 stew pair 接入这台电脑。');
@@ -139,8 +145,8 @@ async function main(command?: string, ...args: string[]) {
       }
       return;
     }
-    case '--help': console.log('用法：stew [pair|start|add|status]\n指定任务平台：stew pair --url https://你的域名\n代理：stew pair --proxy system|direct|http://主机:端口（默认 system）'); return;
-    default: console.error('用法：stew [pair|start|add|status]'); process.exitCode = 1;
+    case '--help': console.log('用法：stew [pair|start|add|status|extension]\n指定任务平台：stew pair --url https://你的域名\n代理：stew pair --proxy system|direct|http://主机:端口（默认 system）\nPi 扩展：stew extension path|install|remove'); return;
+    default: console.error('用法：stew [pair|start|add|status|extension]'); process.exitCode = 1;
   }
 }
 

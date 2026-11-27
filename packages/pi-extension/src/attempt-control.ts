@@ -8,11 +8,12 @@ const POLL_MS = 5_000;
 const CLOSE_RETRY_MS = 30_000;
 const MAX_CLOSE_TURNS = 3;
 const CONTROL_ENTRY = 'steward-attempt-control';
+const CONTINUE_ENTRY = 'steward-background-continue-issued';
 const closeInput = /^(?:请\s*)?结束讨论[。.!！]?$/u;
 const pendingSchema = c.requestIdSchema.extend({ waitId: c.uuidSchema.nullable() });
 type PendingReply = { requestId: string; waitId: string | null };
 
-export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, request: Request) {
+export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, request: Request, manual = false, continuation = false) {
   let control: c.AgentControlResponse | undefined;
   let taskType: c.TaskType | undefined;
   let pendingReply: PendingReply | undefined;
@@ -95,6 +96,25 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
     remember();
   }
 
+  function continuationIssued(ctx: ExtensionContext) {
+    return ctx.sessionManager.getEntries().some((entry) => entry.type === 'custom' &&
+      entry.customType === CONTINUE_ENTRY && entry.data === attemptId);
+  }
+
+  function startContinuation(ctx: ExtensionContext, state: c.AgentControlResponse) {
+    if (!continuation || manual || !state.continuationReady || state.deliverySaved || state.discussionEndRequested ||
+        !ctx.isIdle() || continuationIssued(ctx)) return;
+    // 先保存一次性发送意图；发送结果未知时不自动重放有副作用的接续。
+    pi.appendEntry(CONTINUE_ENTRY, attemptId);
+    try {
+      pi.sendMessage({ customType: 'steward-background-continue', display: true,
+        content: '用户已请求从前台中断处后台继续本任务。先调用 steward_task 读取最新目标与授权，核对原会话、工作现场、实际进展及中断操作结果，再判断继续执行还是提问等待。不得重放初次开工指令或旧工具请求，不扩大授权。',
+      }, { triggerTurn: true, deliverAs: 'followUp' });
+    } catch {
+      if (ctx.hasUI) ctx.ui.notify('自动接续消息发送未确认，未重复发送。请在原会话核对实际进展后继续。', 'warning');
+    }
+  }
+
   async function sync(ctx: ExtensionContext, signal: AbortSignal) {
     if (signal.aborted || shutdownRequested) return;
     try {
@@ -103,15 +123,25 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
       await flushEnd(signal);
       await flushReply(signal);
       if (signal.aborted) return;
-      if (state.type === 'discussion' && control?.discussionEndRequested && state.deliverySaved && ctx.isIdle()) finish(ctx);
-      else if (!state.deliverySaved) startClosingTurn(ctx);
+      if (!manual && state.type === 'discussion' && control?.discussionEndRequested && state.deliverySaved && ctx.isIdle()) finish(ctx);
+      else if (!state.deliverySaved) { startClosingTurn(ctx); startContinuation(ctx, state); }
     } catch (error) {
       if (error instanceof AgentError && error.code === 'attempt_ended' && !signal.aborted) lifetime?.abort();
       // 离线不丢待确认操作；下次轮询会重试同一请求编号。
     }
   }
 
-  pi.on('session_start', (_event, ctx) => {
+  function activate(ctx: ExtensionContext, id = attemptId, nextRequest = request) {
+    request = nextRequest;
+    deactivate();
+    attemptId = id;
+    control = undefined;
+    taskType = undefined;
+    pendingReply = undefined;
+    pendingEnd = undefined;
+    uncertainWait = true;
+    closingTurns = 0;
+    shutdownRequested = false;
     context = ctx;
     const controller = new AbortController();
     lifetime = controller;
@@ -130,15 +160,19 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
       if (!controller.signal.aborted && !shutdownRequested) timer = setTimeout(() => void poll(), POLL_MS).unref();
     }
     void poll();
-  });
-  pi.on('session_shutdown', () => {
+  }
+  function deactivate() {
     lifetime?.abort();
     clearTimeout(timer);
     context = undefined;
-  });
+  }
+  if (!manual) pi.on('session_start', (_event, ctx) => activate(ctx));
+  pi.on('session_shutdown', deactivate);
 
   pi.on('input', async (event) => {
-    if (!event.text.trim() && !event.images?.length) return;
+    if (!context || (!event.text.trim() && !event.images?.length)) return;
+    // 原生用户输入优先于尚未发送的自动接续，不在其后另开一轮旧目标指令。
+    if (continuation && !continuationIssued(context)) pi.appendEntry(CONTINUE_ENTRY, attemptId);
     const end = closeInput.test(event.text.trim());
     const signal = lifetime?.signal;
     const operation = serial(async () => {
@@ -163,8 +197,10 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
   });
 
   pi.on('before_agent_start', (event) => {
+    if (!context) return;
     event.systemPromptOptions.promptGuidelines.push(
       'Steward：需要用户回答明确问题时调用 steward_ask，再在原 Pi 会话提问并等待；普通对话不要调用该工具。',
+      manual ? '若 steward_task 显示讨论（discussion），只围绕讨论目标交流；普通回合结束不交付、不结束目标。只有收到 Steward 已确认的结束请求才保存简短结论与未决事项，再 steward_finish 解除绑定但不退出 Pi。' :
       '若 steward_task 显示讨论（discussion），只围绕讨论目标交流；普通回合结束、没有回复或已经形成结论，都不交付也不退出。只有收到 Steward 已确认的结束请求才整理简短结论与未决事项、交付并退出。',
     );
     if (control?.type === 'discussion' && control.discussionEndRequested) {
@@ -175,19 +211,26 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
   });
 
   return {
+    activate, deactivate,
+    get discussionEndConfirmed() { return control?.discussionEndRequested === true; },
     finish,
     get deliverySaved() { return control?.deliverySaved === true; },
     noteTaskType(type: c.TaskType) { taskType = type; },
     ask<T extends { waitId?: string }>(send: () => Promise<T>, signal?: AbortSignal) {
+      const lifetimeSignal = lifetime?.signal;
+      const requestSignal = lifetimeSignal && signal ? AbortSignal.any([lifetimeSignal, signal]) : lifetimeSignal ?? signal;
       return serial(async () => {
-        await flushReply(signal);
+        if (requestSignal?.aborted) throw new AgentError('binding_changed');
+        await flushReply(requestSignal);
+        if (requestSignal?.aborted) throw new AgentError('binding_changed');
         try {
           const asked = await send();
+          if (requestSignal?.aborted) throw new AgentError('binding_changed');
           if (asked.waitId && control) control = { ...control, waitId: asked.waitId };
           uncertainWait = !asked.waitId || !control;
           return asked;
         } catch (error) {
-          uncertainWait = true;
+          if (!requestSignal?.aborted) uncertainWait = true;
           throw error;
         }
       });

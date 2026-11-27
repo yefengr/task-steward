@@ -129,11 +129,11 @@ it('实际现场仅由所属机器的运行中实施尝试确认，可更新且�
   expect((await x.agent(a.id, '/workspace', request({ workspace: updated }))).status).toBe(200);
   expect((await x.agent(a.id, '/workspace', first)).status).toBe(200);
   await errorCode(await x.agent(a.id, '/workspace', { ...first, workspace: updated }), 409, 'conflict');
-  expect(x.store.get('SELECT * FROM attempts WHERE id=?', a.id)).toMatchObject({ workspace_path: project.path, session_id: a.sessionId,
+  expect(x.store.get('SELECT * FROM attempts WHERE id=?', a.id)).toMatchObject({ workspace_path: updated.path, session_id: updated.sessionId,
     confirmed_workspace_path: updated.path, confirmed_git_kind: updated.gitKind, confirmed_git_branch: updated.gitBranch,
     confirmed_session_id: updated.sessionId, confirmed_session_file: updated.sessionFile });
   const context = await responseOf(c.agentContextResponseSchema, await x.agent(a.id, '/context'));
-  expect(context.workspace.path).toBe(project.path);
+  expect(context.workspace.path).toBe(updated.path);
   expect(context.workspace).not.toHaveProperty('previous');
   expect(context.workspace.requirements.join(' ')).toContain('Do not create a branch or worktree for read-only work.');
   const web = await (await x.web(`/tasks/${task.id}`)).text();

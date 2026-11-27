@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import * as c from '@pi-steward/contract';
 import { jsonInput, routeParam } from './app.js';
 import { requireMachineAuth } from './auth.js';
+import { startForeground, validateForegroundBinding } from './foreground.js';
 import type { Store } from './store.js';
 import { createTask, updateTask } from './tasks.js';
 import { projectViews, requireProject, taskDetail, taskView } from './views.js';
@@ -11,6 +12,29 @@ import type { TaskRow } from './views.js';
 export function mountTaskManagement(store: Store, now: () => number) {
   const management = new Hono();
   const authenticate = (context: Context) => requireMachineAuth(store, context.req.header('Authorization'));
+  management.post('/foreground/start', async (context) => {
+    authenticate(context);
+    const body = await jsonInput(context, c.foregroundStartRequestSchema);
+    const response = store.immediate(() => {
+      const machineId = authenticate(context);
+      const time = now();
+      const saved = store.request({ machineId, actor: 'agent', operation: 'foreground_start', target: body.goalId }, body, time,
+        () => c.foregroundStartResponseSchema.parse(startForeground(store, machineId, body, time)));
+      validateForegroundBinding(store, machineId, body, saved.binding, time);
+      return saved;
+    });
+    return context.json(response);
+  });
+  management.get('/foreground/:goalId', (context) => {
+    const machineId = authenticate(context);
+    const goalId = routeParam(context.req.param('goalId'), c.uuidSchema);
+    const attempt = store.get<{ id: string; task_id: string; owner_pid: number }>(`SELECT a.id,a.task_id,a.owner_pid FROM foreground_goals g
+      JOIN attempts a ON a.task_id=g.task_id WHERE g.machine_id=? AND g.goal_id=? AND a.execution_mode='foreground'
+      ORDER BY a.claimed_at DESC,a.rowid DESC LIMIT 1`, machineId, goalId);
+    return context.json(c.foregroundLookupResponseSchema.parse({ binding: attempt ? {
+      goalId, pid: attempt.owner_pid, taskId: attempt.task_id, attemptId: attempt.id,
+    } : null }));
+  });
   management.get('/projects', (context) => {
     authenticate(context);
     return context.json(c.webProjectsResponseSchema.parse({ projects: projectViews(store) }));

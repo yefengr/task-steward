@@ -73,6 +73,7 @@ function AttemptRecord({ attempt }: { attempt: Attempt }) {
     <dl className="kv">
       <dt>{t.task.result}</dt><dd>{result}{attempt.needsVerification && ` · ${t.task.needsVerification}`}</dd>
       <dt>{t.form.agent}</dt><dd>{attempt.agent === 'pi' ? 'Pi' : t.form.claude}</dd>
+      <dt>{t.execution.mode}</dt><dd>{t.execution.modes[attempt.executionMode]}</dd>
       <dt>{t.task.attempt}</dt><dd><code>{attempt.id}</code></dd>
       <dt>{t.task.session}</dt><dd><code>{attempt.sessionId}</code></dd>
       <dt>{t.task.tmux}</dt><dd><code>{attempt.tmuxSession ?? t.common.unknown}</code></dd>

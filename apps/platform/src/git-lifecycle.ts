@@ -3,7 +3,7 @@ import { gitCommitSchema } from '@pi-steward/contract';
 import type { AgentPrepareGitRequest, AttemptWorkspace, LauncherGitOperation, LauncherGitReport, ProjectGitSettings, TaskGit } from '@pi-steward/contract';
 import { reject } from './errors.js';
 import type { Store } from './store.js';
-import { requireProject, requireTask, taskView } from './views.js';
+import { requireMachine, requireProject, requireTask, taskView } from './views.js';
 import type { AttemptRow } from './views.js';
 
 export function gitState(store: Store, taskId: string): TaskGit | null {
@@ -116,6 +116,10 @@ export function acceptGit(store: Store, taskId: string, deliveryId: string) {
   const operation: LauncherGitOperation = { id, taskId, projectId: task.project_id, deliveryId, baseBranch: git.baseBranch,
     baseCommit: git.baseCommit, taskBranch: git.taskBranch, repositoryPath: git.repositoryPath, worktreePath: git.worktreePath,
     approvedCommit: delivery.commit, mergedCommit: null, phase: 'merge' };
+  const source = store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? AND id=(SELECT attempt_id FROM deliveries WHERE id=?)', taskId, deliveryId);
+  if (source?.execution_mode === 'foreground' && source.goal_id && source.owner_pid) {
+    operation.foregroundOwner = { goalId: source.goal_id, pid: source.owner_pid };
+  }
   store.run('INSERT INTO git_operations VALUES (?,?,?,?,?)', id, taskId, git.machineId, JSON.stringify(operation), 'merge');
   save(store, taskId, { ...git, operationId: id, deliveryId, approvedCommit: delivery.commit, mergedCommit: null, phase: 'awaiting_merge', message: null });
   return true;
@@ -125,7 +129,9 @@ export function gitDirectives(store: Store, machineId: string): LauncherGitOpera
     const git = gitState(store, row.task_id);
     if (!git || git.operationId !== row.id || !idle(store, row.task_id) ||
         (row.phase === 'merge' ? git.phase !== 'awaiting_merge' : git.phase !== 'cleanup_pending')) return [];
-    return [{ ...JSON.parse(row.authorization) as LauncherGitOperation, phase: row.phase, mergedCommit: git.mergedCommit }];
+    const operation = JSON.parse(row.authorization) as LauncherGitOperation;
+    if (operation.foregroundOwner && !requireMachine(store, machineId).foreground_control) return [];
+    return [{ ...operation, phase: row.phase, mergedCommit: git.mergedCommit }];
   });
 }
 export function reportGit(store: Store, machineId: string, id: string, input: LauncherGitReport, now: number) {

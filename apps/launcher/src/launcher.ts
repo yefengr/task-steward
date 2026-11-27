@@ -32,12 +32,14 @@ export class Launcher {
     now?: () => number;
     monotonicNow?: () => number;
     warn?: (message: string) => void;
+    configFile?: string;
   }) {
     this.gitLifecycle = new GitLifecycle({ state: options.state, config: options.config, save: () => this.persist(),
       platform: options.platform, warn: options.warn });
     this.control = new SessionControl({ state: options.state, tmux: options.tmux, save: () => this.persist(),
       now: () => this.now(), monotonicNow: () => this.monotonicNow(), extraArgs: options.config.pi.extraArgs,
-      started: (record) => this.started(record), warn: options.warn });
+      started: (record) => this.started(record), warn: options.warn,
+      configFile: options.configFile });
   }
 
   private get state() { return this.options.state; }
@@ -162,6 +164,7 @@ export class Launcher {
     const requestStartedAt = { wall: this.now(), monotonic: this.monotonicNow() };
     const response = await this.retryable(() => this.options.platform.heartbeat({
       requestId: randomUUID(), launcherVersion: this.options.version, sessionControl: true, gitLifecycle: true,
+      ...(this.options.configFile ? { foregroundControl: true as const } : {}),
       slots: this.options.config.slots, projects: this.options.config.projects, attempts,
     }));
     if (!response) return;
@@ -247,6 +250,7 @@ export class Launcher {
 
   private async reconcile({ response, requestStartedAt }: Heartbeat, claimPending = false) {
     const operations = response.sessionOperations ?? [];
+    this.control.reconcileForegroundLocks(new Set(operations.map(({ id }) => id)));
     const protectedIds = await this.reconcileSessionOperations(operations, requestStartedAt);
     for (const directive of response.directives) {
       if (protectedIds.has(directive.attemptId)) continue;

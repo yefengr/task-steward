@@ -45,6 +45,9 @@ importers:
       '@pi-steward/contract':
         specifier: workspace:*
         version: link:../../packages/contract
+      '@pi-steward/execution-runtime':
+        specifier: workspace:*
+        version: link:../../packages/execution-runtime
       '@pi-steward/platform-http':
         specifier: workspace:*
         version: link:../../packages/platform-http
@@ -155,11 +158,26 @@ importers:
         specifier: 'catalog:'
         version: 4.1.12(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.0))
 
+  packages/execution-runtime:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.2
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.12(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.0))
+
   packages/pi-extension:
     dependencies:
       '@pi-steward/contract':
         specifier: workspace:*
         version: link:../contract
+      '@pi-steward/execution-runtime':
+        specifier: workspace:*
+        version: link:../execution-runtime
       '@pi-steward/platform-http':
         specifier: workspace:*
         version: link:../platform-http

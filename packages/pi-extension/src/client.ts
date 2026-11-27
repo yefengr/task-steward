@@ -12,7 +12,7 @@ export class AgentError extends Error {
 
 type Validator<T> = { safeParse(value: unknown): { success: true; data: T } | { success: false } };
 
-function loadConfig(env: NodeJS.ProcessEnv) {
+export function loadConfigWithPath(env: NodeJS.ProcessEnv) {
   const home = homedir();
   const current = resolve(home, DEFAULT_LOCAL_CONFIG);
   const legacy = resolve(home, LEGACY_LOCAL_CONFIG);
@@ -25,15 +25,16 @@ function loadConfig(env: NodeJS.ProcessEnv) {
       if (!stat.isFile() || (stat.mode & 0o777) !== 0o600 || stat.uid !== process.getuid?.()) throw new Error();
       const config = localConfigSchema.safeParse(JSON.parse(readFileSync(fd, 'utf8')));
       if (!config.success) throw new Error();
-      return config.data;
+      return { config: config.data, configPath: path };
     } finally { closeSync(fd); }
   } catch { throw new AgentError('invalid_config'); }
 }
 
 export type ClientOptions = { env: NodeJS.ProcessEnv; fetcher?: typeof fetch };
 
-export function agentClient(attemptId: string, options: ClientOptions) {
-  return platformClient('agent', options, { 'X-Steward-Attempt-Id': attemptId });
+export function agentClient(attemptId: string, options: ClientOptions, ownerId?: string) {
+  return platformClient('agent', options, { 'X-Steward-Attempt-Id': attemptId,
+    ...(ownerId ? { 'X-Steward-Owner-Id': ownerId } : {}) });
 }
 
 export function taskManagementClient(options: ClientOptions) {
@@ -42,7 +43,7 @@ export function taskManagementClient(options: ClientOptions) {
 
 function platformClient(namespace: 'agent' | 'task-management', options: ClientOptions, extraHeaders?: Record<string, string>) {
   return async function request<T>(method: 'GET' | 'POST' | 'PATCH', route: string, schema: Validator<T>, body?: object, signal?: AbortSignal) {
-    const config = loadConfig(options.env);
+    const { config } = loadConfigWithPath(options.env);
     const origin = new URL(config.platformUrl).origin;
     const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     let res: Response;

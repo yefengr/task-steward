@@ -14,7 +14,7 @@ import { useI18n } from '../lib/i18n';
 import { ErrorNotice } from './common';
 
 type Confirmation = { action: 'cancel' } | { action: 'accept' | 'rework'; delivery: Delivery } |
-  { action: 'restart' | 'restore'; request: WebSessionOperationRequest; machineName: string };
+  { action: 'restart' | 'restore' | 'background'; request: WebSessionOperationRequest; machineName: string };
 const primaryActions: Partial<Record<Task['status'], TaskAction>> = {
   unscheduled: 'schedule', queued: 'unschedule', interrupted: 'reschedule',
 };
@@ -40,7 +40,9 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
   const activeAttemptId = latestAttempt?.endedAt === null ? latestAttempt.id : undefined;
   const endRequested = activeAttemptId !== undefined && endRequestedFor === activeAttemptId;
   const closed = task.status === 'done' || task.status === 'cancelled';
-  const primary = task.reworkPending && task.status === 'queued' ? undefined : primaryActions[task.status];
+  const foreground = latestAttempt?.executionMode === 'foreground';
+  const primary = (task.reworkPending && task.status === 'queued') || (foreground && task.status === 'interrupted')
+    ? undefined : primaryActions[task.status];
   const canEndDiscussion = task.type === 'discussion' && task.status === 'running' && Boolean(activeAttemptId)
     && !task.discussionEndRequested && !endRequested;
   const pending = sessionOperation?.status === 'pending';
@@ -49,7 +51,8 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
   const acceptedIntegration = Boolean(git && isIntegrationPhase(git.phase));
   const retryBlocked = isGitRetryBlocked(git);
   const sessionAction = task.agent === 'pi' && latestAttempt?.agent === 'pi' && !latestAttempt.cancelRequested && !gitActive
-    ? task.status === 'interrupted' && latestAttempt.endedAt !== null ? 'restore'
+    ? foreground && (task.status === 'running' || task.status === 'interrupted' || (task.status === 'queued' && task.reworkPending)) && !task.discussionEndRequested ? 'background'
+      : task.status === 'interrupted' && latestAttempt.endedAt !== null ? 'restore'
       : task.status === 'running' && latestAttempt.endedAt === null && latestAttempt.startedAt !== null &&
         !task.discussionEndRequested && !endRequested ? 'restart' : undefined
     : undefined;
@@ -86,9 +89,11 @@ export function TaskControls({ task, delivery, latestAttempt, sessionOperation, 
   }
   return <>
     {!closed && <div className="action-bar">
-      {sessionAction === 'restore' && !pending && <Button disabled={busy} onClick={confirmSessionAction}>{t.actions.restore}</Button>}
+      {(sessionAction === 'restore' || sessionAction === 'background') && !pending && <Button disabled={busy} onClick={confirmSessionAction}>{t.actions[sessionAction]}</Button>}
       {primary && <Button loading={busy} disabled={pending} variant={primary === 'unschedule' || sessionAction === 'restore' ? 'default' : 'filled'}
         onClick={() => void execute(primary)}>{t.actions[primary]}</Button>}
+      {foreground && task.status === 'queued' && task.reworkPending && !pending &&
+        <p className="action-hint muted small">{t.session.foregroundReworkHint}</p>}
       {canEndDiscussion && <Button loading={ending} disabled={busy || pending}
         onClick={() => void endDiscussion()}>{t.actions.endDiscussion}</Button>}
       {task.status === 'review' && delivery?.review === null && !acceptedIntegration && <>

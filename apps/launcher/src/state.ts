@@ -25,6 +25,7 @@ const sessionOperation = z.strictObject({
   attemptId: uuidSchema,
   replacementId: uuidSchema.optional(),
   step: z.enum(['stop', 'launch', 'cleanup']),
+  foregroundOwner: z.strictObject({ goalId: uuidSchema, pid: z.int().min(2).max(0x7fffffff) }).optional(),
   stopIssued: z.boolean().optional(),
   launchIssued: z.boolean().optional(),
   report: launcherSessionReportSchema.optional(),

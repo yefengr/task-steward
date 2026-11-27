@@ -27,7 +27,7 @@ async function bundle(entry, name, shebang) {
         output: { entryFileNames: name, ...(shebang ? { banner: '#!/usr/bin/env node' } : {}) },
       },
     },
-    ssr: { noExternal: ['@pi-steward/contract', '@pi-steward/platform-http'] },
+    ssr: { noExternal: ['@pi-steward/contract', '@pi-steward/platform-http', '@pi-steward/execution-runtime'] },
   });
 }
 
@@ -39,7 +39,9 @@ try {
     name: '@yefengr/steward', version: launcher.version, description: 'Task Steward macOS launcher and task extension',
     repository: { type: 'git', url: 'git+https://github.com/yefengr/task-steward.git' },
     type: 'module', bin: { stew: './dist/index.js' }, engines: { node: '>=24.20.0 <25' }, os: ['darwin'],
-    files: ['dist'], dependencies: { zod: requireFromLauncher('zod/package.json').version, typebox: extension.peerDependencies.typebox },
+    files: ['dist'], keywords: ['pi-package', 'pi-extension', 'task-steward'],
+    pi: { extensions: ['./dist/extension.js'] },
+    dependencies: { zod: requireFromLauncher('zod/package.json').version, typebox: extension.peerDependencies.typebox },
   }, null, 2)}\n`);
   mkdirSync(target, { recursive: true });
   execFileSync('npm', ['pack', '--ignore-scripts', '--pack-destination', target], { cwd: staging, stdio: 'inherit' });

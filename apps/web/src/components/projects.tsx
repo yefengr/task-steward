@@ -7,7 +7,7 @@ import { api } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { projectPath, taskPath } from '../lib/paths';
 import { useResource } from '../lib/resource';
-import { Empty, ErrorNotice, GitPhaseChip, Loading, StatusChip, TaskFlags, TaskTypeLabel, WaitReason } from './common';
+import { Empty, ErrorNotice, GitPhaseChip, Loading, StatusChip, TaskFlags, TaskTypeLabel, TaskOriginLabel, WaitReason } from './common';
 import { ProjectGitSettings } from './project-git-settings';
 import { isIntegrationPhase } from '../lib/git';
 
@@ -33,7 +33,7 @@ function TaskRow({ task, machines }: { task: Task; machines: WebMachine[] }) {
     <span className="row-title">{task.title}</span>
     <span className="row-side"><StatusChip task={task} />{task.git && <GitPhaseChip git={task.git} />}<TaskFlags task={task} /></span>
     <span className="row-sub">
-      <TaskTypeLabel task={task} />
+      <TaskTypeLabel task={task} /><TaskOriginLabel task={task} />
       <span>{task.agent === 'pi' ? 'Pi' : t.form.claude}</span>
       {machine && <span>{machine.name}</span>}
       {task.git && <span>{t.git.branchPair.replace('{base}', task.git.baseBranch).replace('{task}', task.git.taskBranch)}</span>}

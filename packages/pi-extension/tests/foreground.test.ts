@@ -308,6 +308,35 @@ it('新 attempt 绑定后重建心跳，不继续给旧 attempt 续租', async (
   expect(heartbeats).toEqual([old.attemptId, next.attemptId]);
 });
 
+it('已绑定 start 被明确交接拒绝后 reload 按原尝试 CAS 重绑，不重放旧 nonce', async () => {
+  const f = fixture(); const bodies: Record<string, unknown>[] = [];
+  let binding: { goalId: string; pid: number; taskId: string; attemptId: string } | undefined;
+  let pending = false;
+  const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+    if (init?.method === 'GET') return Response.json({ binding });
+    const body = JSON.parse(String(init?.body)); bodies.push(body);
+    if (pending) return Response.json({ error: { code: 'session_handover_pending', message: 'handover pending' } }, { status: 409 });
+    if (!binding || body.previousAttemptId === binding.attemptId) binding = {
+      goalId: body.goalId, pid: process.pid, taskId: binding?.taskId ?? randomUUID(), attemptId: randomUUID(),
+    };
+    return Response.json({ binding });
+  });
+  const state = registerForeground(f.pi, { env: { STEWARD_CONFIG: f.config }, fetcher }, vi.fn(), vi.fn());
+  await f.fire('session_start', { reason: 'startup' });
+  const first = await state.begin(input, f.ctx);
+  pending = true;
+  await expect(state.begin(input, f.ctx)).rejects.toThrow('session_handover_pending');
+  expect(state.binding).toEqual(first.binding);
+  await f.fire('session_shutdown', { reason: 'reload' });
+  await f.fire('session_start', { reason: 'reload' });
+  pending = false;
+  const next = await state.begin(input, f.ctx);
+  expect(bodies[2]).toMatchObject({ previousAttemptId: first.binding.attemptId, previousOwnerPid: process.pid });
+  expect(bodies[2]!.requestId).not.toBe(bodies[1]!.requestId);
+  expect(next.binding).toMatchObject({ taskId: first.binding.taskId, goalId: first.binding.goalId });
+  expect(next.binding.attemptId).not.toBe(first.binding.attemptId);
+});
+
 it('迟到关闭响应不会把恢复后的新目标标成已结束', async () => {
   const f = fixture(); let resolveClose: ((response: Response) => void) | undefined;
   const fetcher = vi.fn<typeof fetch>(async (url, init) => {
@@ -395,6 +424,50 @@ it('原对话被其他任务占用时，换目标及离线不能绕过；原生�
     { env: { STEWARD_CONFIG: f.config }, fetcher }, vi.fn(), vi.fn());
   const moved = { ...f.ctx, sessionManager: forked } as unknown as ExtensionContext;
   expect((await next.begin(input, moved)).binding).toHaveProperty('attemptId');
+});
+
+it.each(['heartbeat', 'control', 'progress'] as const)('交接核对中 %s 先返回409仍保持绑定和轮询，alive拒绝后原尝试可直接回报', async (first) => {
+  const f = fixture(); vi.useFakeTimers(); cleanup.push(() => vi.useRealTimers());
+  const binding = { goalId: randomUUID(), pid: process.pid, taskId: randomUUID(), attemptId: randomUUID() };
+  let pending = false; let revoke = false; let initial = true;
+  const calls: { route: string; attempt: string | null }[] = [];
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    const route = String(url).split('/').at(-1)!;
+    calls.push({ route, attempt: new Headers(init?.headers).get('X-Steward-Attempt-Id') });
+    if (route === 'start') return Response.json({ binding });
+    if (revoke) return Response.json({ error: { code: 'forbidden', message: 'revoked' } }, { status: 403 });
+    if (pending && (!initial || route === first)) {
+      initial = false;
+      return Response.json({ error: { code: 'session_handover_pending', message: 'handover pending' } }, { status: 409 });
+    }
+    if (route === 'control') return Response.json({ type: 'implementation', discussionEndRequested: false, deliverySaved: false, waitId: null });
+    return Response.json({ ok: true });
+  });
+  registerSteward(f.pi, { env: { STEWARD_CONFIG: f.config }, fetcher });
+  async function call(name: string, args = {}) {
+    return vi.mocked(f.pi.registerTool).mock.calls.find(([t]) => t.name === name)![0].execute('test', args, undefined, undefined, f.ctx as never);
+  }
+  await f.fire('session_start', { reason: 'startup' });
+  expect((await call('steward_begin_task', input)).details).toMatchObject({ binding });
+  await vi.advanceTimersByTimeAsync(0);
+  pending = true;
+  if (first === 'progress') expect((await call('steward_progress', { text: '核对中' })).details).toEqual({ code: 'session_handover_pending' });
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(initial).toBe(false);
+  expect((await call('steward_interrupt_task')).details).toEqual({ code: 'session_handover_pending' });
+  const before = calls.length;
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(calls.slice(before).some((c) => c.route === 'heartbeat')).toBe(true);
+  expect(calls.slice(before).some((c) => c.route === 'control')).toBe(true);
+  // 模拟 launcher 因 session_source_alive 拒绝交接，平台清除 pending；不再次 begin。
+  pending = false;
+  expect((await call('steward_progress', { text: '核对后继续' })).details).toEqual({ ok: true });
+  expect(calls.filter((c) => c.route === 'start')).toHaveLength(1);
+  expect(calls.filter((c) => ['heartbeat', 'control', 'progress', 'interrupt'].includes(c.route)).every((c) => c.attempt === binding.attemptId)).toBe(true);
+  revoke = true;
+  expect((await call('steward_progress', { text: '真正失权' })).details).toEqual({ code: 'forbidden' });
+  for (const toolName of ['write', 'subagent']) expect((await f.fire('tool_call', { toolName })).some((v) => (v as { block?: boolean })?.block)).toBe(true);
+  expect((await call('steward_progress', { text: '不得继续' })).details).toEqual({ code: 'binding_required' });
 });
 
 it('历史无绑定不能使用执行工具', async () => {

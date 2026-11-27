@@ -60,12 +60,31 @@ it('后台交接保留槽、封锁前台写回，alive 失败不替换，重试�
   const op = request({ attemptId: b.attemptId, mode: 'background' });
   expect((await x.action(b.taskId, 'session-operation', op)).status).toBe(200);
   expect((await x.action(b.taskId, 'session-operation', request({ attemptId: b.attemptId, mode: 'background' }))).status).toBe(409);
-  expect((await agent(x, b, '/progress', request({ text: '迟到' }))).status).toBe(409);
-  expect((await start(x, b.body)).status).toBe(409);
+  const blocked = [
+    await agent(x, b, '/control'),
+    await agent(x, b, '/foreground/heartbeat', request()),
+    await agent(x, b, '/progress', request({ text: '迟到' })),
+    await start(x, b.body),
+    await start(x, { ...b.body, ...request() }),
+    await agent(x, b, '/foreground/settle', request()),
+    await agent(x, b, '/foreground/interrupt', request()),
+  ];
+  for (const response of blocked) {
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe('session_handover_pending');
+  }
+  expect((await x.detail(b.taskId)).progress).toHaveLength(0);
+  expect((await x.detail(b.taskId)).attempts).toHaveLength(1);
   const hb = await x.launcher('/heartbeat', request({ launcherVersion: 'test', slots: 1, projects: [project], attempts: [], sessionControl: true, foregroundControl: true }));
   expect((await hb.json()).sessionOperations[0]).toMatchObject({ mode: 'background', step: 'stop', foregroundOwner: { goalId: b.goalId, pid: b.pid } });
   expect((await x.launcher(`/session-operations/${op.requestId}/report`, request({ step: 'stop', result: 'failed', failure: 'session_source_alive' }))).status).toBe(200);
   expect((await agent(x, b, '/context')).status).toBe(200);
+  expect((await agent(x, b, '/foreground/heartbeat', request())).status).toBe(200);
+  expect((await agent(x, b, '/progress', request({ text: '仍由原执行继续' }))).status).toBe(200);
+  expect((await x.detail(b.taskId)).attempts).toMatchObject([{ id: b.attemptId }]);
+  expect((await x.detail(b.taskId)).attempts).toHaveLength(1);
+  expect(x.store.get('SELECT goal_id,owner_id,ended_at FROM attempts WHERE id=?', b.attemptId))
+    .toMatchObject({ goal_id: b.goalId, owner_id: b.body.ownerId, ended_at: null });
   const retry = request({ attemptId: b.attemptId, mode: 'background' });
   expect((await x.action(b.taskId, 'session-operation', retry)).status).toBe(200);
   const report = request({ step: 'stop', result: 'stopped' });
@@ -216,6 +235,20 @@ it('未确认现场的前台返修只阻塞自身，不阻塞该机器其它可�
   const response = await x.launcher('/claim', request());
   expect(response.status).toBe(200); expect((await response.json()).attempt.taskId).toBe(other.id);
   expect((await x.detail(b.taskId)).task.status).toBe('queued');
+});
+it('真实失权状态优先于临时交接错误，返修排队不能被 stop 核对遮蔽', async () => {
+  const x = await setup(); const b = await bind(x);
+  await agent(x, b, '/end-discussion', request());
+  const submitted = await (await agent(x, b, '/deliveries', request(delivery))).json();
+  expect((await x.action(b.taskId, 'rework', { deliveryId: submitted.deliveryId, feedback: '只允许新一轮返修' })).status).toBe(200);
+  await x.launcher('/heartbeat', request({ launcherVersion: 'test', slots: 1, projects: [project], attempts: [], sessionControl: true, foregroundControl: true }));
+  expect((await x.action(b.taskId, 'session-operation', request({ attemptId: b.attemptId, mode: 'background' }))).status).toBe(200);
+  for (const response of [await agent(x, b, '/control'), await agent(x, b, '/progress', request({ text: '旧轮不得实施' })),
+    await start(x, { ...b.body, ...request() })]) {
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe('conflict');
+  }
+  expect((await x.detail(b.taskId)).attempts).toHaveLength(1);
 });
 it.each(['accept', 'rework'] as const)('用户先%s也允许原 owner 仅结算关闭，不重新开放实施权限', async (action) => {
   const x = await setup(); const b = await bind(x);

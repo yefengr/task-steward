@@ -110,7 +110,15 @@ export function registerForeground(pi: ExtensionAPI, options: ClientOptions,
       saved.pending = true;
       remember();
       const body = c.foregroundStartRequestSchema.parse({ ...payload, requestId: saved.requestId, ownerId });
-      const data = await management('POST', 'foreground/start', c.foregroundStartResponseSchema, body, signal);
+      const starting = saved;
+      const data = await management('POST', 'foreground/start', c.foregroundStartResponseSchema, body, signal).catch((error: unknown) => {
+        // 交接核对是明确未应用 start 的拒绝，不按网络未知结果重放；迟到响应不能改写新目标。
+        if (currentGeneration === generation && saved === starting && error instanceof AgentError && error.code === 'session_handover_pending') {
+          starting.pending = false;
+          remember();
+        }
+        throw error;
+      });
       checkCurrent();
       saved.pending = false;
       saved.denied = false; saved.deniedSession = undefined;
@@ -124,6 +132,7 @@ export function registerForeground(pi: ExtensionAPI, options: ClientOptions,
       if (!heartbeat) {
         const request = agentClient(bound.attemptId, options, ownerId);
         heartbeat = setInterval(() => {
+          // session_handover_pending 仅阻止当前写回；继续心跳等待交接核对结果，不撤销绑定。
           void request('POST', 'foreground/heartbeat', c.okResponseSchema, { requestId: randomUUID() }).catch((error: unknown) => {
             if (bound?.attemptId === data.binding.attemptId && error instanceof AgentError && ['forbidden', 'attempt_ended', 'conflict'].includes(error.code)) suspend();
           });

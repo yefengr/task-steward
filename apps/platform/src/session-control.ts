@@ -37,13 +37,14 @@ function operationForReplacement(store: Store, attemptId: string) {
   return store.get<OperationRow>("SELECT * FROM session_operations WHERE replacement_id=? AND step IN ('launch','cleanup')", attemptId);
 }
 
-export function requireNoPendingSessionOperation(store: Store, taskId: string, now: number, cancelling = false) {
+export function requireNoPendingSessionOperation(store: Store, taskId: string, now: number, cancelling = false,
+  code: 'conflict' | 'session_handover_pending' = 'conflict') {
   // 超时后允许取消任务，但保留替代进程的核对和槽位，直到确认退出。
   if (cancelling) store.run(`UPDATE session_operations SET step='cleanup'
     WHERE task_id=? AND step='launch' AND deadline_at<=?`, taskId, now);
   if (store.get(`SELECT 1 FROM session_operations WHERE task_id=? AND
     (step='launch' OR (step='cleanup' AND ?=0) OR (step='stop' AND deadline_at>?))`, taskId, Number(cancelling), now)) {
-    reject('conflict', 'A session operation is pending');
+    reject(code, 'A session operation is pending');
   }
 }
 

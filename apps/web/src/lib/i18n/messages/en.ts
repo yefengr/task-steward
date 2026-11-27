@@ -18,6 +18,7 @@ export const en = {
     session_machine_offline: 'The original Mac is offline. Try again when it comes online. No request was queued.',
     session_unsupported: 'The launcher on the original Mac does not support this action. Update it and try again.',
     session_in_use: 'The original Pi conversation is associated with another unsettled execution or handover. Resolve that task first. Use a native new session or fork for an independent goal; changing its ID does not bypass conversation ownership.',
+    session_handover_pending: 'Handover verification is pending. Keep the existing binding and polling, then retry with the same parameters. This does not revoke execution ownership; do not create another task or bypass the handover to write reports.',
     session_record_missing: 'The original Pi conversation could not be located. No empty session was created.',
     session_workspace_unconfirmed: 'The implementation Git workspace has not been confirmed. Read the task and record the actual directory, branch and session in the original Pi before requesting background continuation.',
     session_slots_full: 'The original Mac has no available execution slots. Try again when a slot is free.',

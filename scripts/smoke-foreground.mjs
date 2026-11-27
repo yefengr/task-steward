@@ -28,7 +28,7 @@ const workspace = join(folder, 'project');
 const configFile = join(folder, 'config.json');
 const proof = join(workspace, 'continued.txt');
 const env = { PATH: process.env.PATH, LC_ALL: 'C' };
-const tmux = (...args) => execFileSync('tmux', ['-S', socket, ...args], { env, encoding: 'utf8', timeout: 3000 });
+const tmux = (...args) => execFileSync('tmux', ['-S', socket, '-f', '/dev/null', ...args], { env, encoding: 'utf8', timeout: 3000 });
 let server, store;
 async function until(label, run) {
   const deadline = Date.now() + 18000;
@@ -60,9 +60,10 @@ try {
   writeFileSync(configFile, JSON.stringify(config), { mode: 0o600 });
   const privateEnv = { HOME: folder, PI_CODING_AGENT_DIR: join(folder, 'pi'), TERM: 'xterm-256color', STEWARD_SMOKE_WRITE: proof };
   const sourceTarget = 'ordinary-foreground';
-  tmux('new-session', '-d', '-s', sourceTarget, '-c', workspace,
+  const sourcePane = tmux('new-session', '-d', '-s', sourceTarget, '-c', workspace, '-P', '-F', '#{pane_id}',
     ...Object.entries({ ...privateEnv, STEWARD_CONFIG: configFile, PATH: config.path.join(':') }).flatMap(([key, value]) => ['-e', `${key}=${value}`]),
-    '--', pi, ...extraArgs, '-e', extension, '--', '开始前台目标');
+    '--', pi, ...extraArgs, '-e', extension, '--', '开始前台目标').trim();
+  assert.match(sourcePane, /^%\d+$/);
   const front = await until('普通 Pi 登记明确目标', () => store.get("SELECT a.* FROM attempts a WHERE execution_mode='foreground' AND ended_at IS NULL"));
   assert.equal(store.get('SELECT status FROM tasks WHERE id=?', front.task_id).status, 'running');
   assert.ok(front.session_locator);
@@ -83,8 +84,22 @@ try {
   await launcher.tick();
   const aliveRequest = { requestId: randomUUID(), attemptId: front.id, mode: 'background' };
   await web(`/tasks/${front.task_id}/session-operation`, aliveRequest);
+  // 暂不 tick 启动器，让真实原 Pi 在 stop 窗口收到可重试错误，而不是跳过竞态窗口。
+  tmux('send-keys', '-t', sourcePane, '核对期间原 Pi 回报', 'Enter');
+  await until('真实 Pi 已收到交接待确认而非解绑错误', () => {
+    const lines = readFileSync(original.sessionFile, 'utf8').split('\n').slice(0, -1);
+    const result = lines.map((line) => JSON.parse(line)).findLast((entry) => entry.type === 'message' &&
+      entry.message.role === 'toolResult' && entry.message.toolName === 'steward_progress');
+    if (!result) return false;
+    assert.equal(result.message.details?.code, 'session_handover_pending', JSON.stringify(result.message));
+    return true;
+  });
+  assert.equal(store.get('SELECT COUNT(*) n FROM progress').n, 0);
   await launcher.tick();
   assert.equal(store.get('SELECT failure FROM session_operations WHERE id=?', aliveRequest.requestId).failure, 'session_source_alive');
+  tmux('send-keys', '-t', sourcePane, '拒绝接管后原 Pi 回报', 'Enter');
+  await until('alive 拒绝后原 Pi 未重新登记即可回报', () => store.get(
+    'SELECT 1 FROM progress WHERE attempt_id=? AND text=?', front.id, '原 Pi 保持绑定，无需重新登记即可回报。'));
   assert.equal(store.get('SELECT COUNT(*) n FROM attempts').n, 1);
   // 只退出本脚本创建的隔离前台会话，不能操作正式 steward socket。
   tmux('kill-session', '-t', `=${sourceTarget}`);
@@ -120,7 +135,7 @@ try {
   assert.equal(continuationMessages.length, 1);
   assert.ok(continuationMessages[0].content.includes('用户已请求从前台中断处后台继续'));
   assert.equal(store.get('SELECT COUNT(*) n FROM tasks').n, 1);
-  console.log('真实 Pi 前台冒烟通过：普通会话纳管；活进程拒绝接管；原进程退出后同任务/同原生对话后台接续并实际写入；未重放初始指令。');
+  console.log('真实 Pi 前台冒烟通过：普通会话纳管；stop 期间收到可重试错误，活进程拒绝接管后原 Pi 无需重绑可回报；退出后同任务/同原生对话后台接续并实际写入；未重放初始指令。');
 } finally {
   try { tmux('kill-server'); } catch { /* 仅本脚本的临时 socket。 */ }
   if (server) await new Promise((resolve) => server.close(resolve));

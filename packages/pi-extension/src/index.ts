@@ -55,6 +55,7 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
       code === 'task_context_required' ? '请先调用 steward_task 确认任务类型；只为实现任务记录工作现场。' :
       code === 'workspace_unavailable' ? '无法核对当前目录、Git 或持久化 Pi 会话；请核对本机现场，必要时向用户确认。' :
       code === 'attempt_ended' ? '本次尝试已结束，请检查平台状态。' :
+      code === 'session_handover_pending' ? '交接核对中，保持原绑定和轮询，稍后使用原参数重试。这不代表执行权限失效，不要另建任务或绕过交接写回。' :
       code === 'conflict' ? '请核对平台状态。交付请求重试时请保留原参数。' :
       code === 'pending_writes_full' ? '待确认的请求已达上限，请先使用原参数重试已有请求。' :
       code === 'invalid_config' ? '请检查本机配置及 0600 文件权限后重试。' : '请稍后使用相同参数重试。';
@@ -135,6 +136,7 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
       if (generation !== epoch || id !== activeId) throw new AgentError('binding_changed');
       return data;
     } catch (error) {
+      // 交接核对中的可重试错误不在失权列表内，保留原绑定及 control 轮询。
       if (generation === epoch && id === activeId && foreground.binding && error instanceof AgentError &&
           ['forbidden', 'attempt_ended', 'conflict', 'session_in_use'].includes(error.code)) foreground.suspend(true, error.code === 'session_in_use');
       throw error;

@@ -92,14 +92,15 @@ export function mountMachineRoutes(store: Store, now: () => number) {
         // 关闭回执不授予实施权限；用户先验收/返修也不应让原尝试永远无法结算。
         if (attempt.ended_at !== null) return store.request(key, body, time,
           () => reject('attempt_ended', 'No matching foreground close receipt'));
-        requireNoPendingSessionOperation(store, attempt.task_id, time);
+        requireNoPendingSessionOperation(store, attempt.task_id, time, false, 'session_handover_pending');
         return store.request(key, body, time, () => foregroundAction(store, attempt,
           operation === 'foreground_settle' ? 'settle' : 'interrupt', time));
       }
       requireForegroundOwner(store, attempt, context.req.header('X-Steward-Owner-Id'), time);
       return store.request({ machineId, actor: 'agent', operation, target: questionScoped ? `${attemptId}/${questionId}` : attemptId }, body, time, () => {
         requireLiveAttempt(store, attempt);
-        if (operation !== 'session') requireNoPendingSessionOperation(store, attempt.task_id, time);
+        if (operation !== 'session') requireNoPendingSessionOperation(store, attempt.task_id, time, false,
+          attempt.execution_mode === 'foreground' ? 'session_handover_pending' : 'conflict');
         return output.parse(apply(attempt, body, time, questionId));
       });
     });

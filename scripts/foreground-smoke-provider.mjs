@@ -13,6 +13,8 @@ function reply(messages) {
     return text('后台接续完成，等待用户。');
   }
   const content = typeof last?.content === 'string' ? last.content : last?.content?.map((block) => block.text ?? '').join('');
+  if (content?.includes('核对期间原 Pi 回报')) return tool('steward_progress', { text: '核对期间的前台回报' });
+  if (content?.includes('拒绝接管后原 Pi 回报')) return tool('steward_progress', { text: '原 Pi 保持绑定，无需重新登记即可回报。' });
   if (content?.includes('用户已请求从前台中断处后台继续')) return tool('steward_task');
   if (content?.includes('开始前台目标')) return tool('steward_begin_task', {
     title: 'Native foreground smoke', goal: '隔离验证前台纳管及原对话后台继续', type: 'discussion', transition: 'continue',

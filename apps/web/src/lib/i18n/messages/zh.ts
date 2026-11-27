@@ -18,6 +18,7 @@ export const zh: Messages = {
     session_machine_offline: '原 Mac 离线。请等它上线后重试；本次没有留下待执行请求。',
     session_unsupported: '原 Mac 上的启动器不支持此操作。请更新启动器后重试。',
     session_in_use: '原 Pi 对话仍关联另一项未结算执行或交接，请先处理该任务。独立目标应使用原生新会话或 fork，不能换目标编号绕过对话占用。',
+    session_handover_pending: '交接核对中。请保持原绑定和轮询，稍后使用原参数重试；这不代表执行权限失效，不要另建任务或绕过交接写回。',
     session_record_missing: '找不到原 Pi 对话的定位记录。没有创建空白会话。',
     session_workspace_unconfirmed: '尚未确认本次实现的 Git 工作现场。请回原 Pi 会话读取任务并登记真实目录、分支及会话，再请求后台继续。',
     session_slots_full: '原 Mac 没有空闲执行名额。请等有空闲名额后重试。',

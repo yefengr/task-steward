@@ -13,10 +13,11 @@ export function requireForegroundOwner(store: Store, attempt: AttemptRow, owner:
   if (attempt.execution_mode !== 'foreground') return;
   if (!owner || owner !== attempt.owner_id) reject('forbidden', 'Foreground owner credentials required');
   requireLiveAttempt(store, attempt);
-  requireNoPendingSessionOperation(store, attempt.task_id, now);
-  if (store.get("SELECT 1 FROM session_operations WHERE task_id=? AND step IN ('stop','launch','cleanup')", attempt.task_id)) reject('conflict', 'Foreground handover is pending');
+  // 临时交接不能遮蔽已经失效的实施权限；专用关闭回执另走原有路径。
   const status = requireTask(store, attempt.task_id).status;
   if (status !== 'running' && status !== 'review') reject('conflict', 'Foreground task is not active');
+  requireNoPendingSessionOperation(store, attempt.task_id, now, false, 'session_handover_pending');
+  if (store.get("SELECT 1 FROM session_operations WHERE task_id=? AND step IN ('stop','launch','cleanup')", attempt.task_id)) reject('session_handover_pending', 'Foreground handover is pending');
 }
 
 export function validateForegroundBinding(store: Store, machineId: string, input: ForegroundStartRequest, binding: ForegroundBinding, now: number) {
@@ -37,13 +38,13 @@ export function startForeground(store: Store, machineId: string, input: Foregrou
   if (existing) {
     taskId = existing.task_id;
     const task = requireTask(store, taskId);
-    requireNoPendingSessionOperation(store, taskId, now);
-    if (store.get("SELECT 1 FROM session_operations WHERE task_id=? AND step IN ('stop','launch','cleanup')", taskId)) reject('conflict', 'Foreground handover is pending');
     source = store.get<AttemptRow>('SELECT * FROM attempts WHERE task_id=? ORDER BY claimed_at DESC, rowid DESC LIMIT 1', taskId);
     if (!source || source.execution_mode !== 'foreground' || source.cancel_requested || gitLocked(store, taskId) ||
         !['running', 'interrupted'].includes(task.status) || store.get('SELECT 1 FROM deliveries WHERE task_id=?', taskId)) {
       reject('conflict', 'Goal cannot grant foreground ownership in its current state');
     }
+    requireNoPendingSessionOperation(store, taskId, now, false, 'session_handover_pending');
+    if (store.get("SELECT 1 FROM session_operations WHERE task_id=? AND step IN ('stop','launch','cleanup')", taskId)) reject('session_handover_pending', 'Foreground handover is pending');
     if (source.owner_id === input.ownerId && source.owner_pid === input.pid && source.ended_at === null && task.status === 'running' && input.previousAttemptId === undefined &&
         sameLocator(attemptLocator(source), input.locator)) {
       store.run('UPDATE attempts SET session_locator=?, session_id=?, workspace_path=? WHERE id=?', JSON.stringify(input.locator), input.locator.sessionId, input.locator.path, source.id);

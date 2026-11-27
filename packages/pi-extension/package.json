@@ -9,7 +9,7 @@
     "test": "tsc -p tsconfig.build.json && vitest run"
   },
   "dependencies": { "@pi-steward/execution-runtime": "workspace:*", "@pi-steward/contract": "workspace:*", "@pi-steward/platform-http": "workspace:*" },
-  "peerDependencies": { "@earendil-works/pi-coding-agent": "1.5.2", "typebox": "1.3.27" },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "typebox": "*" },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.5.2",
     "@types/node": "catalog:",

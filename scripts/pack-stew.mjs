@@ -11,7 +11,6 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const requireFromWeb = createRequire(new URL('../apps/web/package.json', import.meta.url));
 const { build } = await import(pathToFileURL(requireFromWeb.resolve('vite')).href);
 const launcher = requireFromWeb('../../apps/launcher/package.json');
-const extension = requireFromWeb('../../packages/pi-extension/package.json');
 const requireFromLauncher = createRequire(new URL('../apps/launcher/package.json', import.meta.url));
 const staging = mkdtempSync(join(tmpdir(), 'stew-package-'));
 const target = resolve(process.argv[2] ?? '.pi/tmp');
@@ -41,7 +40,9 @@ try {
     type: 'module', bin: { stew: './dist/index.js' }, engines: { node: '>=24.20.0 <25' }, os: ['darwin'],
     files: ['dist'], keywords: ['pi-package', 'pi-extension', 'task-steward'],
     pi: { extensions: ['./dist/extension.js'] },
-    dependencies: { zod: requireFromLauncher('zod/package.json').version, typebox: extension.peerDependencies.typebox },
+    dependencies: { zod: requireFromLauncher('zod/package.json').version },
+    peerDependencies: { typebox: '*' },
+    peerDependenciesMeta: { typebox: { optional: true } },
   }, null, 2)}\n`);
   mkdirSync(target, { recursive: true });
   execFileSync('npm', ['pack', '--ignore-scripts', '--pack-destination', target], { cwd: staging, stdio: 'inherit' });

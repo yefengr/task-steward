@@ -22,11 +22,12 @@ export const launcherHeartbeatResponseSchema = z.strictObject({
   sessionOperations: z.array(launcherSessionDirectiveSchema).optional(),
   gitOperations: z.array(launcherGitOperationSchema).optional(),
 });
+export const LAUNCHER_TASK_TITLE_HEADER = 'X-Steward-Task-Title';
 export const launcherClaimRequestSchema = requestIdSchema;
 export const claimedAttemptSchema = z.strictObject({
   id: uuidSchema, taskId: uuidSchema, projectId: projectIdSchema, agent: z.literal('pi'),
   sessionId: piSessionIdSchema, restoreSession: z.boolean(), sessionLocator: piSessionLocatorSchema.optional(),
-  displayName: z.string().min(1).max(80), kind: z.enum(['new', 'rework']),
+  displayName: z.string().min(1).max(80), title: z.string().min(1).max(500).optional(), kind: z.enum(['new', 'rework']),
 });
 export const launcherClaimResponseSchema = z.strictObject({ attempt: claimedAttemptSchema.nullable() });
 export const launcherStartedRequestSchema = requestIdSchema.extend({ tmuxSession: tmuxSessionSchema, startedAt: timestampSchema });

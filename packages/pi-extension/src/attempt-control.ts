@@ -9,7 +9,6 @@ const CLOSE_RETRY_MS = 30_000;
 const MAX_CLOSE_TURNS = 3;
 const CONTROL_ENTRY = 'steward-attempt-control';
 const CONTINUE_ENTRY = 'steward-background-continue-issued';
-const closeInput = /^(?:请\s*)?结束讨论[。.!！]?$/u;
 const pendingSchema = c.requestIdSchema.extend({ waitId: c.uuidSchema.nullable() });
 type PendingReply = { requestId: string; waitId: string | null };
 
@@ -18,6 +17,7 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
   let taskType: c.TaskType | undefined;
   let pendingReply: PendingReply | undefined;
   let pendingEnd: string | undefined;
+  let pendingEndRevision = 0;
   let uncertainWait = true;
   let closingTurns = 0;
   let nextClosingAt = 0;
@@ -47,7 +47,7 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
   }
 
   function remember() {
-    if (context) pi.appendEntry(CONTROL_ENTRY, { attemptId, pendingReply, pendingEnd });
+    if (context) pi.appendEntry(CONTROL_ENTRY, { attemptId, pendingReply, pendingEnd, pendingEndRevision });
   }
 
   async function read(signal?: AbortSignal) {
@@ -99,13 +99,13 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
     closingTurns++;
     nextClosingAt = Date.now() + CLOSE_RETRY_MS;
     pi.sendMessage({ customType: 'steward-end-discussion', display: true,
-      content: '用户已请求结束讨论。基于本次会话整理简短结论和未决事项，用 steward_deliver 保存（结论写在 summary 或 done，未决事项写在 issues）。不要继续执行未决事项；不要取消或验收任务。保存确认后调用 steward_finish。',
+      content: '用户已请求结束讨论。先说明「将保存以下结论并结束」及结论摘要，不另行提问；用 steward_deliver 保存简短结论和未决事项（结论写在 summary 或 done，未决事项写在 issues）。不要继续执行未决事项，不要取消或验收任务。保存确认后调用 steward_finish。',
     }, { triggerTurn: true, deliverAs: 'followUp' });
   }
 
   async function flushEnd(signal?: AbortSignal) {
     if (!pendingEnd || !taskType) return;
-    if (taskType === 'discussion') {
+    if (taskType === 'discussion' && pendingEndRevision === (control?.workRevision ?? 0)) {
       await request('POST', 'end-discussion', c.okResponseSchema, { requestId: pendingEnd }, signal);
       if (signal?.aborted) return;
       if (control) control = { ...control, discussionEndRequested: true };
@@ -167,12 +167,13 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
     lifetime = controller;
     for (const entry of ctx.sessionManager.getEntries().toReversed()) {
       if (entry.type !== 'custom' || entry.customType !== CONTROL_ENTRY) continue;
-      const saved = entry.data as { attemptId?: string; pendingReply?: unknown; pendingEnd?: unknown } | undefined;
+      const saved = entry.data as { attemptId?: string; pendingReply?: unknown; pendingEnd?: unknown; pendingEndRevision?: number } | undefined;
       if (saved?.attemptId !== attemptId) continue;
       const reply = pendingSchema.safeParse(saved.pendingReply);
       const end = c.uuidSchema.safeParse(saved.pendingEnd);
       pendingReply = reply.success ? reply.data : undefined;
       pendingEnd = end.success ? end.data : undefined;
+      pendingEndRevision = saved?.pendingEndRevision ?? 0;
       break;
     }
     async function poll() {
@@ -193,18 +194,9 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
     if (!context || (!event.text.trim() && !event.images?.length)) return;
     // 原生用户输入优先于尚未发送的自动接续，不在其后另开一轮旧目标指令。
     userInputPending = ++inputSequence;
-    const end = closeInput.test(event.text.trim());
     const signal = lifetime?.signal;
-    const operation = serial(async () => {
+    void serial(async () => {
       if (signal?.aborted) return;
-      if (end && taskType !== 'implementation') {
-        pendingEnd ??= randomUUID();
-        closingTurns = 0;
-        nextClosingAt = 0;
-        remember();
-        await flushEnd(signal);
-        return;
-      }
       if ((uncertainWait || control?.waitId) && !pendingReply) {
         pendingReply = { requestId: randomUUID(), waitId: uncertainWait ? null : control?.waitId ?? null };
         remember();
@@ -213,27 +205,39 @@ export function registerAttemptControl(pi: ExtensionAPI, attemptId: string, requ
       // 保持普通输入不等待网络；下一次控制读取前先登记用户优先意图。
       await read(signal);
     }).catch(() => undefined);
-    // 普通输入不等网络；串行队列保证其回复确认先于下一次显式提问。
-    if (end) await operation;
+    // 输入不按关键词结束任务；由 Agent 判断语义并显式登记。
     // 保留原用户消息。Pi Reach 通过 SDK 投递用户输入，并使用该消息的开始事件确认投递。
   });
 
   pi.on('before_agent_start', (event) => {
     if (!context) return;
-    event.systemPromptOptions.promptGuidelines.push(
-      'Steward：需要用户回答明确问题时调用 steward_ask，再在原 Pi 会话提问并等待；普通对话不要调用该工具。',
-      manual ? '若 steward_task 显示讨论（discussion），只围绕讨论目标交流；普通回合结束不交付、不结束目标。只有收到 Steward 已确认的结束请求才保存简短结论与未决事项，再 steward_finish 解除绑定但不退出 Pi。' :
-      '若 steward_task 显示讨论（discussion），只围绕讨论目标交流；普通回合结束、没有回复或已经形成结论，都不交付也不退出。只有收到 Steward 已确认的结束请求才整理简短结论与未决事项、交付并调用 steward_finish 结算工作段，但不退出；最终验收后的明确 closeRequested 才退出。',
-    );
     if (control?.type === 'discussion' && control.discussionEndRequested) {
       event.systemPromptOptions.promptGuidelines.push(
-        'Steward 已确认用户请求结束本次讨论。现在整理简短结论与未决事项，用 steward_deliver 保存（未决事项写在 issues），确认后调用 steward_finish，不继续执行未决事项。',
+        'Steward 已确认用户请求结束本次讨论。先说明「将保存以下结论并结束」及摘要，不另行提问；用 steward_deliver 保存简短结论与未决事项（未决事项写在 issues），确认后调用 steward_finish，不继续执行未决事项。',
       );
     }
   });
 
   return {
     activate, deactivate, accept,
+    endDiscussion(signal?: AbortSignal) {
+      return serial(async () => {
+        const state = await read(signal);
+        if (signal?.aborted) throw new AgentError('cancelled');
+        if (state.type !== 'discussion') throw new AgentError('discussion_required');
+        if (pendingEndRevision !== (state.workRevision ?? 0)) pendingEnd = undefined;
+        if (!state.discussionEndRequested) {
+          pendingEnd ??= randomUUID();
+          pendingEndRevision = state.workRevision ?? 0;
+          closingTurns = 0;
+          nextClosingAt = 0;
+          remember();
+          await flushEnd(signal);
+          if (signal?.aborted) throw new AgentError('cancelled');
+        }
+        return { ok: true, discussionEndRequested: true };
+      });
+    },
     get discussionEndConfirmed() { return control?.discussionEndRequested === true; },
     finish,
     get deliverySaved() { return control?.deliverySaved === true; },

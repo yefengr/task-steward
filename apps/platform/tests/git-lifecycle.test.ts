@@ -36,6 +36,32 @@ async function accepted() {
   return { x, task, attempt, deliveryId: submitted.deliveryId };
 }
 
+it('取消释放分支与树占用但保留历史快照，活动任务仍排斥承接', async () => {
+  const { x, task, attempt } = await prepared();
+  await x.agent(attempt.id, '/workspace', request({ workspace }));
+  const next = await x.create(); await x.action(next.id, 'schedule'); const nextAttempt = await x.claimed();
+  await errorCode(await x.agent(nextAttempt.id, '/git/prepare', request(preparation)), 409, 'conflict');
+  const history = x.store.get('SELECT snapshot FROM task_git WHERE task_id=?', task.id);
+  expect((await x.action(task.id, 'cancel')).status).toBe(200);
+  expect((await x.agent(nextAttempt.id, '/git/prepare', request(preparation))).status).toBe(200);
+  expect((await x.agent(nextAttempt.id, '/workspace', request({ workspace: { ...workspace, sessionId: 'next', sessionFile: '/sessions/next.jsonl' } }))).status).toBe(200);
+  expect(x.store.get('SELECT snapshot FROM task_git WHERE task_id=?', task.id)).toEqual(history);
+});
+
+it('同树实际分支登记更新快照，不能迁往其他树或抢占活动分支', async () => {
+  const { x, attempt } = await prepared();
+  await x.agent(attempt.id, '/workspace', request({ workspace }));
+  const next = await x.create(); await x.action(next.id, 'schedule'); const nextAttempt = await x.claimed();
+  await x.agent(nextAttempt.id, '/git/prepare', request({ ...preparation, taskBranch: 'feature/occupied' }));
+  await errorCode(await x.agent(attempt.id, '/workspace', request({ workspace: { ...workspace, gitBranch: 'feature/occupied' } })), 409, 'conflict');
+  await errorCode(await x.agent(attempt.id, '/workspace', request({ workspace: { ...workspace, gitRoot: '/different', path: '/different' } })), 409, 'conflict');
+  const renamed = request({ workspace: { ...workspace, gitBranch: 'feature/renamed' } });
+  expect((await x.agent(attempt.id, '/workspace', renamed)).status).toBe(200);
+  expect((await x.agent(attempt.id, '/workspace', renamed)).status).toBe(200);
+  expect((await context(x, attempt.id)).git?.taskBranch).toBe('feature/renamed');
+  expect(x.store.all('SELECT * FROM progress WHERE attempt_id=?', attempt.id)).toHaveLength(1);
+});
+
 it('会话占用拒绝 workspace 时，外层事务回滚已计算的 Git 现场和确认字段', async () => {
   const { x, task, attempt } = await prepared();
   const otherTask = await x.create(); await x.action(otherTask.id, 'schedule'); const other = await x.claimed();

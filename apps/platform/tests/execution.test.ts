@@ -15,6 +15,45 @@ async function returnForRework(x: Awaited<ReturnType<typeof setup>>, taskId: str
   expect((await x.action(taskId, 'rework', { deliveryId, feedback: '补充验收' })).status).toBe(200);
 }
 
+it.each([false, true])('未准备 Git 且未登记现场的后台返修可直接接续原会话，原进程保留=%s', async (retained) => {
+  const x = await setup(); await x.heartbeat();
+  const title = '包含标点「A～F」的任务';
+  const task = await x.create(title); await x.action(task.id, 'schedule');
+  const first = await x.claimed(); expect(first).not.toHaveProperty('title');
+  const locator = { path: project.path, sessionId: first.sessionId, sessionFile: '/sessions/no-git.jsonl' };
+  expect((await x.agent(first.id, '/session', request({ locator }))).status).toBe(200);
+  const submitted = await responseOf(c.agentDeliveryResponseSchema, await x.agent(first.id, '/deliveries', request(delivery)));
+  expect((await x.agent(first.id, '/settle', request())).status).toBe(200);
+  if (!retained) await x.exit(first.id);
+  await x.action(task.id, 'rework', { deliveryId: submitted.deliveryId, feedback: '补充分析' });
+  const response = await responseOf(c.launcherClaimResponseSchema, await x.claim());
+  if (retained) {
+    expect(response.attempt).toBeNull();
+    expect(await (await x.agent(first.id, '/context')).json()).toMatchObject({ implementationAllowed: true, workRevision: 1 });
+  } else {
+    expect(response.attempt).toMatchObject({ kind: 'rework', sessionLocator: locator });
+  }
+});
+
+it.each([undefined, '0'])('未声明标题能力时保持 0.4.1 严格领取响应，升级重放仍只领取一次（%s）', async (capability) => {
+  const x = await setup(); await x.heartbeat();
+  const title = '任务原始标题「A～F」';
+  const task = await x.create(title); await x.action(task.id, 'schedule');
+  const input = request();
+  const headers: Record<string, string> = capability === undefined ? {} : { [c.LAUNCHER_TASK_TITLE_HEADER]: capability };
+  const oldSchema = c.launcherClaimResponseSchema.extend({ attempt: c.claimedAttemptSchema.omit({ title: true }).nullable() });
+  const legacy = await x.send('/launcher/claim', input, { machine: x.token, headers });
+  expect(legacy.status).toBe(200);
+  const saved = oldSchema.parse(await legacy.json());
+  expect(saved.attempt).not.toHaveProperty('title');
+  const upgraded = await x.send('/launcher/claim', input, { machine: x.token, headers: { [c.LAUNCHER_TASK_TITLE_HEADER]: '1' } });
+  expect(upgraded.status).toBe(200);
+  expect(c.launcherClaimResponseSchema.parse(await upgraded.json()).attempt).toEqual({ ...saved.attempt, title });
+  const replay = await x.send('/launcher/claim', input, { machine: x.token });
+  expect(oldSchema.parse(await replay.json())).toEqual(saved);
+  expect((await x.detail(task.id)).attempts).toHaveLength(1);
+});
+
 it('按显式、上次、单机选路，拒绝未登记项目和 Claude', async () => {
   const x = await setup();
   await x.heartbeat(3);

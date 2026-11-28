@@ -61,13 +61,13 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
         AND step='failed' AND deadline_at>=?`, previous.id, candidate.updated_at);
       const latest = store.get<{ id: string }>('SELECT id FROM attempts WHERE task_id=? ORDER BY claimed_at DESC,rowid DESC LIMIT 1', candidate.id);
       if (failed || !machine.foreground_control || !machine.session_control || latest?.id !== previous.id ||
-          (candidate.type === 'implementation' && !previous.confirmed_git_kind)) { blockedForeground = true; continue; }
+          (gitState(store, candidate.id) && !previous.confirmed_git_kind)) { blockedForeground = true; continue; }
       requestSessionOperation(store, candidate.id, { requestId: randomUUID(), attemptId: previous.id, mode: 'background' }, now);
       return { attempt: null };
     }
     // 缺定位的返修保持停止，但不能挡住同机其它可执行任务。
     if (locator && previous && (previous.ended_at !== null ||
-        ((candidate.type !== 'implementation' || sameLocator(confirmedLocator(previous), locator)) &&
+        ((!gitState(store, candidate.id) || sameLocator(confirmedLocator(previous), locator)) &&
         (!gitState(store, candidate.id) || previous.confirmed_git_root === gitState(store, candidate.id)?.worktreePath)))) { selected = { task: candidate, previous, locator }; break; }
   }
   if (!selected) {
@@ -101,7 +101,7 @@ export function claim(store: Store, machineId: string, now: number): LauncherCla
   const safeTitle = task.title.replace(/[^\p{L}\p{N} _-]/gu, ' ').trim().replace(/^[ -]+/, '');
   const displayName = safeTitle.slice(0, 79).replace(/[\uD800-\uDBFF]$/u, '').trimEnd() || 'Pi task';
   return { attempt: { id, taskId: task.id, projectId: task.project_id, agent: 'pi', sessionId,
-    restoreSession: locator !== undefined, ...(locator ? { sessionLocator: locator } : {}), displayName, kind } };
+    restoreSession: locator !== undefined, ...(locator ? { sessionLocator: locator } : {}), displayName, title: task.title, kind } };
 }
 
 export function started(store: Store, attempt: AttemptRow, input: LauncherStartedRequest, now: number) {

@@ -2,8 +2,9 @@ import { lifecycleBlocked, isReadTool, type Permission } from './lifecycle.js';
 import { registerForeground } from './foreground.js';
 import { claimInstance } from './instance-guard.js';
 import { createHash } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import * as c from '@pi-steward/contract';
-import type { AgentToolResult, ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { registerAttemptControl } from './attempt-control.js';
 import { AgentError, agentClient, taskManagementClient, validatedBody } from './client.js';
@@ -11,11 +12,12 @@ import type { ClientOptions } from './client.js';
 import { retryableWrites } from './retry-writes.js';
 import { registerSessionReport } from './session-report.js';
 import { registerTaskSession } from './task-session.js';
-import { checkReworkWorkspace } from './workspace.js';
+import { checkReworkWorkspace, currentSessionLocator } from './workspace.js';
 import { prepareGit, proveWorkspace } from './git-lifecycle.js';
 
 const text = () => Type.String({ maxLength: 100_000 });
 const lines = () => Type.Array(text());
+const preparedWorkspaceNext = '先检查 taskBranch 是否已有工作树；承接时用 Pi 已有切换能力复用原树和会话，否则将精确 baseRef 和 taskBranch 交给 Pi worktree_create。目标现场须干净且无他任务占用，切换后调用 steward_task 自动确认；确认前不在主目录写代码。';
 const deliveryParameters = Type.Object({
   summary: text(), done: lines(), notCovered: lines(), verification: lines(), howTo: lines(), issues: lines(),
   baseCommit: Type.Optional(text()), commit: Type.Optional(text()), reportRef: Type.Optional(text()),
@@ -34,7 +36,8 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
     const guidance = code === 'session_in_use' ? '原 Pi 对话仍被另一项执行或交接占用，不得继续实施或换目标编号绕过。先处理原任务；独立目标请使用原生新会话或 fork。' :
       ['binding_required', 'session_source_alive', 'session_ownership_unavailable', 'foreground_fork_requires_handover'].includes(code) ? '当前未取得执行权。不得凭历史继续实施，也不能按新未纳管目标绕过竞争；核对旧进程、当前会话和平台状态后重试。' :
       code === 'goal_interrupt_required' ? '上一目标尚未结束。请先明确结束或调用 steward_interrupt_task 中断，不得静默替换目标。' :
-      code === 'discussion_end_required' ? '讨论尚未收到 Steward 确认的结束请求，不能交付。请继续交流或等待用户明确结束讨论。' :
+      code === 'discussion_end_required' ? '讨论尚未登记结束请求。用户已明确表达结束意图时调用 steward_end_discussion；否则继续交流，不自动交付。' :
+      code === 'discussion_required' ? '只有讨论任务可登记结束讨论；实现任务按目标执行和交付。' :
       code === 'goal_ended' ? '历史目标已结束，不自动恢复执行；独立目标请用 transition=new。' :
       code === 'cancelled' ? '请求已取消。' :
       code === 'helper_unavailable' ? '请重新安装 Steward。' :
@@ -47,11 +50,10 @@ async function report<T>(run: () => Promise<T>): Promise<AgentToolResult<T | { c
       code === 'git_repository_busy' ? '仓库正在执行其他 Git 操作；待其完成后重试，不要删除锁文件。' :
       code === 'git_upstream_diverged' ? '基准分支与上游分叉；请用户协调基准分支，不要 reset 或强制同步。' :
       code === 'git_dirty' ? '基准工作树有未提交修改；请保留并由其所有者处理后再准备。' :
-      code === 'git_base_checked_out' ? '同步需要推进基准分支，但它仍在其他工作树检出；请维护者将该非任务目录切换到其他分支后重试，不要强制 detach、reset 或删除。' :
       code === 'git_fetch_failed' ? '上游获取失败；检查远端配置、网络和权限后再准备。' :
       code === 'git_invalid_branch' || code === 'git_upstream_invalid' || code === 'git_invalid_ref' ? '分支或上游引用无效；核对 Git 配置和原生分支名称后再准备。' :
       code === 'git_worktree_locked' ? '工作树已锁定；请其所有者确认用途，不要强制解锁或删除。' :
-      code === 'git_workspace_unverified' || code === 'git_snapshot_conflict' || code === 'git_dedicated_branch_required' ? '当前分支、HEAD 或现场与冻结快照不符；重新读取 steward_task 并切回原任务工作树与会话，不创建替代现场。' :
+      code === 'git_workspace_unverified' || code === 'git_snapshot_conflict' || code === 'git_dedicated_branch_required' ? '无法确认冻结 Git 现场：先核对原任务工作树、会话、分支归属与未提交改动，不创建替代现场或重设基线。同树干净分支变更可通过 steward_task 自动登记；来源不明的改动、现场缺失或无法切换时，用 steward_ask 请用户确认。' :
       code === 'git_implementation_required' ? '只为实现任务准备 Git；只读或讨论任务不要创建工作树。' :
       code === 'task_context_required' ? '请先调用 steward_task 确认任务类型；只为实现任务记录工作现场。' :
       code === 'workspace_unavailable' ? '无法核对当前目录、Git 或持久化 Pi 会话；请核对本机现场，必要时向用户确认。' :
@@ -238,6 +240,40 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
   let delivered = false;
   let taskContext: c.AgentContextResponse | undefined;
 
+  async function autoWorkspace(ctx: ExtensionContext, data: c.AgentContextResponse, signal?: AbortSignal) {
+    const scoped = scopedRequest();
+    if (data.task.type !== 'implementation' || !data.git || !data.implementationAllowed) return 'not_required';
+    // 准备仅冻结基线；迁移前不在主树登记，尚未落盘的 Pi 会话也不能冒充已保存。
+    if (!data.git.worktreePath && ctx.cwd === data.git.repositoryPath) return 'prepared';
+    if (data.git.worktreePath && ctx.cwd !== data.git.worktreePath && !ctx.cwd.startsWith(`${data.git.worktreePath}/`)) return 'switch_required';
+    if (data.git.worktreePath && await realpath(data.git.worktreePath).catch(() => undefined) !== data.git.worktreePath) {
+      throw new AgentError('git_workspace_unverified');
+    }
+    const locator = await currentSessionLocator(ctx, true).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw new AgentError('workspace_unavailable');
+    });
+    if (!locator) return 'pending_session';
+    try {
+      await sessionReport.workspace(async () => {
+        const workspace = await proveWorkspace(ctx, data);
+        await write('POST', 'workspace', workspace, (requestId) => scoped('POST', 'workspace', c.okResponseSchema,
+          validatedBody(c.agentWorkspaceRequestSchema, { workspace, requestId }), signal));
+      });
+    } catch (error) {
+      if (error instanceof AgentError && error.code === 'conflict') throw new AgentError('git_workspace_unverified');
+      throw error;
+    }
+    return 'confirmed';
+  }
+  pi.on('session_start', async (_event, ctx) => {
+    if (!activeId) return;
+    try {
+      const data = await request('GET', 'context', c.agentContextResponseSchema);
+      await autoWorkspace(ctx, data);
+    } catch { /* 工具下一次读取会重新核验并明确返回错误，不把后台失败当作已登记。 */ }
+  });
+
   pi.registerTool({
     name: 'steward_task', label: '读取 Steward 任务', description: '读取本次任务的目标、验收要求、决定、交付、返修反馈及工作现场核对结果。',
     parameters: Type.Object({}),
@@ -245,16 +281,22 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
       taskContext = undefined;
       const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
       control.noteTaskType(data.task.type);
-      taskContext = data;
-      const reworkWorkspace = await checkReworkWorkspace(ctx, data);
-      return reworkWorkspace ? { ...data, reworkWorkspace } : data;
+      const workspaceStatus = await autoWorkspace(ctx, data, signal);
+      const current = workspaceStatus === 'confirmed' ? await request('GET', 'context', c.agentContextResponseSchema, undefined, signal) : data;
+      taskContext = current;
+      const reworkWorkspace = workspaceStatus === 'switch_required' ? 'switch_required' : await checkReworkWorkspace(ctx, current);
+      const next = workspaceStatus === 'switch_required' ? '用 Pi 已有能力切回 git.worktreePath 对应的原会话，再调用 steward_task；无法切换或原现场缺失时 steward_ask，不创建替代工作树。' :
+        workspaceStatus === 'pending_session' ? '持久会话尚未落盘，暂不写代码或交付；首条消息保存后重读 steward_task，仍无法确认时 steward_ask。' :
+          reworkWorkspace && reworkWorkspace !== 'confirmed' ? '原 Git 返修现场尚未确认，暂停写入并核对快照、原工作树和会话；用 steward_ask 请用户确认，不创建替代现场或重设基线。' :
+            workspaceStatus === 'prepared' ? preparedWorkspaceNext : undefined;
+      return { ...current, workspaceStatus, ...(reworkWorkspace ? { reworkWorkspace } : {}), ...(next ? { next } : {}) };
     }),
   });
   pi.registerTool({
     name: 'steward_prepare_git', label: '准备任务 Git 基线',
     description: '代码写入前显式同步并固定基线。返回 baseRef 后交给现有 Pi worktree_create；不自行创建或迁移会话。',
     parameters: Type.Object({ taskBranch: Type.String() }),
-    execute: (_id, { taskBranch }, signal) => report(async () => {
+    execute: (_id, { taskBranch }, signal, _update, ctx) => report(async () => {
       const data = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
       if (!data.git && !pi.getAllTools().some((tool) => tool.name === 'worktree_create')) throw new AgentError('git_worktree_capability_required');
       const scoped = scopedRequest();
@@ -267,12 +309,21 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
         snapshot = saved.git;
       }
       taskContext = { ...data, git: snapshot };
-      return { git: snapshot, baseRef: snapshot.baseCommit, taskBranch: snapshot.taskBranch };
+      const workspaceStatus = await autoWorkspace(ctx, taskContext, signal);
+      if (workspaceStatus === 'confirmed') {
+        taskContext = await request('GET', 'context', c.agentContextResponseSchema, undefined, signal);
+        snapshot = taskContext.git!;
+      }
+      return { git: snapshot, baseRef: snapshot.baseCommit, taskBranch: snapshot.taskBranch, workspaceStatus,
+        next: workspaceStatus === 'prepared' ? preparedWorkspaceNext :
+          workspaceStatus === 'pending_session' ? '持久会话尚未落盘；首条消息保存后调用 steward_task 自动确认，不得声称现场已保存。' :
+            workspaceStatus === 'switch_required' ? '使用 Pi 已有能力复用 git.worktreePath 和原会话，切换后 steward_task 自动确认；无法接回时 steward_ask，不创建替代现场。' :
+              workspaceStatus === 'confirmed' ? '现场已自动确认，可按授权继续。' : '当前无须登记现场；按 steward_task 返回的授权执行。' };
     }),
   });
   pi.registerTool({
     name: 'steward_record_workspace', label: '记录 Steward 工作现场',
-    description: '实现任务确认工作空间后，保存当前 Pi 会话的实际工作目录、Git 分支和会话定位。迁移或切换后在目标会话调用。',
+    description: '手动重试保存当前实际目录、Git 分支和会话定位；通常由 Git 准备、会话切换及 steward_task 自动登记，无需单独调用。',
     parameters: Type.Object({}),
     execute: (_id, _args, signal, _update, ctx) => report(async () => {
       if (taskContext?.task.type !== 'implementation') throw new AgentError('task_context_required');
@@ -315,6 +366,12 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
       validatedBody(c.agentDecisionRequestSchema, { ...args, requestId: id }), signal))),
   });
   pi.registerTool({
+    name: 'steward_end_discussion', executionMode: 'sequential', label: '登记结束讨论',
+    description: '仅当用户明确表达结束本次讨论时，由 Agent 结合上下文判断并登记。可包括「结束当前任务」「就到这吧」；已有结论、无人回复或回合结束不算结束。确认后先说明将保存的结论摘要，不另行提问，再 steward_deliver 和 steward_finish。误判后可按已有 steward_continue 流程续做。',
+    parameters: Type.Object({ reason: text(), authorizedByUser: Type.Literal(true) }),
+    execute: (_id, _args, signal) => report(() => control.endDiscussion(signal)),
+  });
+  pi.registerTool({
     name: 'steward_deliver', label: '保存 Steward 交付', description: '保存本次交付。已准备 Git 的代码任务必须传完整 HEAD SHA 作为 commit；baseCommit 可省略并使用冻结快照，显式传入必须完全一致。只读任务不要求提交。仅网络结果未知时使用完全相同的参数重试。',
     parameters: deliveryParameters,
     execute: (_id, args, signal, _update, ctx) => report(async () => {
@@ -322,7 +379,11 @@ export function registerSteward(pi: ExtensionAPI, options: ClientOptions = { env
       if (data.task.type === 'discussion' && !control.discussionEndConfirmed) throw new AgentError('discussion_end_required');
       const scoped = scopedRequest();
       const id = requestId;
-      if (data.git) await proveWorkspace(ctx, data, args);
+      if (data.git) {
+        await proveWorkspace(ctx, data, args);
+        // 交付不能只信继承的 confirmed 字段，必须让平台看到当前实际会话。
+        if (data.implementationAllowed && await autoWorkspace(ctx, data, signal) !== 'confirmed') throw new AgentError('git_workspace_unverified');
+      }
       const saved = await scoped('POST', 'deliveries', c.agentDeliveryResponseSchema,
         validatedBody(c.agentDeliveryRequestSchema, { ...args, ...(data.git ? { baseCommit: args.baseCommit ?? data.git.baseCommit } : {}), requestId: id }), signal);
       delivered = true;

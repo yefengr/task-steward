@@ -50,6 +50,23 @@ function fixture(sourceAttemptId?: string) {
   saveState(file, state);
   return { dir, root, source, marker, operation, accepted, base, file, reportGit, start };
 }
+it.each([false, true])('远端起点领先本地基准时仍兼容安全快进，保留基准检出门禁=%s', async (checkedOut) => {
+  const x = fixture();
+  // 模拟 D：main 留在旧提交，冻结起点为远端提交，任务提交在其后。
+  const remote = x.accepted;
+  const approved = commit(x.source, 'after-remote');
+  x.operation.baseCommit = remote; x.operation.approvedCommit = approved;
+  if (checkedOut) g(x.root, 'switch', 'main');
+  if (checkedOut) {
+    await expect(mergeAccepted(x.operation)).rejects.toMatchObject({ reason: 'git_target_checked_out', rework: false });
+    expect(g(x.root, 'rev-parse', 'main')).toBe(x.base);
+    g(x.root, 'switch', 'maintenance');
+  }
+  await verifySource(x.operation);
+  await mergeAccepted(x.operation);
+  expect(g(x.root, 'rev-parse', 'main')).toBe(approved);
+});
+
 it('前台目标已结算也不代表普通 Pi 已退出，无法确认时不合并或清理', async () => {
   const x = fixture(); x.operation.foregroundOwner = { goalId: randomUUID(), pid: process.pid };
   const status = vi.spyOn(runtime, 'processStatus').mockReturnValue('alive');

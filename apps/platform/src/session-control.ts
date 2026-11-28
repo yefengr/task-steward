@@ -96,7 +96,7 @@ export function requestSessionOperation(store: Store, taskId: string, input: Web
   const machine = requireMachine(store, source.machine_id);
   if (!isOnline(machine, now)) reject('session_machine_offline', 'The original execution machine is offline');
   if (input.mode === 'background' && !machine.foreground_control) reject('session_unsupported', 'Launcher does not support foreground handover');
-  if (input.mode === 'background' && task.type === 'implementation' && !source.confirmed_git_kind) reject('session_workspace_unconfirmed', 'Foreground implementation requires a confirmed Git workspace');
+  if (input.mode === 'background' && gitState(store, taskId) && !source.confirmed_git_kind) reject('session_workspace_unconfirmed', 'Foreground implementation requires a confirmed Git workspace');
   if (!machine.session_control) reject('session_unsupported', 'The original launcher does not support session control');
   if ((input.mode === 'restore' || input.mode === 'background') && occupiedSlots(store, machine.id, now) >= machine.slots) {
     reject('session_slots_full', 'The original machine has no free execution slots');
@@ -171,7 +171,7 @@ export function sessionDirectives(store: Store, machineId: string, now: number):
   for (const operation of rows) {
     const base = { id: operation.id, attemptId: operation.source_attempt_id, mode: operation.mode,
       ...(operation.goal_id && operation.owner_pid ? { foregroundOwner: { goalId: operation.goal_id!, pid: operation.owner_pid! },
-        ...(operation.confirmed_git_kind ? { foregroundGit: { kind: operation.confirmed_git_kind, branch: operation.confirmed_git_branch } } : {}) } : {}) };
+        ...(gitState(store, operation.task_id) && operation.confirmed_git_kind ? { foregroundGit: { kind: operation.confirmed_git_kind, branch: operation.confirmed_git_branch } } : {}) } : {}) };
     const remaining = operation.deadline_at - now;
     if (operation.step === 'cleanup' || (operation.step === 'launch' && remaining <= 0)) {
       directives.push({ ...base, step: 'cleanup', replacementId: operation.replacement_id! });

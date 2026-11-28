@@ -17,7 +17,7 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 const executionTools = ['steward_task', 'steward_prepare_git', 'steward_record_workspace', 'steward_progress', 'steward_ask', 'steward_question_update',
-  'steward_decision', 'steward_deliver', 'steward_continue', 'steward_revise_delivery', 'steward_finish'];
+  'steward_decision', 'steward_end_discussion', 'steward_deliver', 'steward_continue', 'steward_revise_delivery', 'steward_finish'];
 const foregroundTools = ['steward_begin_task', 'steward_interrupt_task'];
 const managementTools = ['steward_list_projects', 'steward_list_tasks', 'steward_get_task', 'steward_create_task', 'steward_update_task'];
 const directories: string[] = [];
@@ -128,10 +128,17 @@ it('仅任务启动会话注入执行规则，原生迁移与手动恢复保留�
   await agent.fire('session_start', { reason: 'startup' });
   const first = await guidelines(agent);
   expect(first).toMatch(/任务台后台启动.*先调用 steward_task/u);
-  expect(first).toMatch(/只读任务不创建工作树.*steward_prepare_git.*不能回退到主分支修改/u);
-  expect(first).toContain('遵守项目已有的任务管理机制与状态来源；Steward 回报不能替代项目要求的记录更新。相关写入须符合本次授权；只读任务不擅自修改项目记录，不迁移或另建管理体系。');
-  expect(first.indexOf('遵守项目已有的任务管理机制与状态来源')).toBeGreaterThan(first.indexOf('会话来源：'));
-  expect(first).toContain('worktree_create');
+  expect(first.split('\n')).toHaveLength(4);
+  expect(first).toContain('Steward 回报不替代项目记录');
+  expect(first).toContain('只读任务不改项目记录、不创建工作树或提交');
+  expect(first).toContain('steward_prepare_git');
+  expect(first).toContain('不在主分支绕过');
+  expect(first).toContain('Agent 不自行合入、清理或推送，不创建空提交');
+  expect(first).toContain('steward_end_discussion');
+  expect(first).toContain('将保存以下结论并结束');
+  expect(first).not.toContain('会话历史不是权限');
+  expect(first).not.toContain('steward_record_workspace');
+  expect(first).not.toContain('完整 SHA');
   expect(await guidelines(agent)).toEqual(first); // 接回仍在运行的进程，不替换任务绑定。
   await agent.fire('session_shutdown');
   const target = SessionManager.forkFrom(original.getSessionFile()!, workspace(), storage);
@@ -143,7 +150,7 @@ it('仅任务启动会话注入执行规则，原生迁移与手动恢复保留�
   const historical = await guidelines(manual);
   expect(historical).toContain('会话历史来源');
   expect(historical).not.toContain('先调用 steward_task');
-  expect(historical).not.toContain('回报不能替代项目要求的记录更新');
+  expect(historical).not.toContain('Steward 回报不替代项目记录');
   expect(manual.registerTool.mock.calls.map(([tool]) => tool.name)).toEqual([...managementTools, ...foregroundTools, ...executionTools]);
 });
 
@@ -193,7 +200,7 @@ it('普通任务可登记预期会话文件，但接续启动不确认空白会�
   } finally { await fresh.fire('session_shutdown'); await resumed.fire('session_shutdown'); }
 });
 
-it('返修核对真实工作树、Git 分支与 Pi 会话，在目标会话保存当前现场', async () => {
+it('未准备 Git 时手动登记仍可用，返修不再依赖额外现场记录', async () => {
   const directory = realpathSync(workspace());
   const root = join(directory, 'repo');
   const linked = join(directory, 'linked');
@@ -239,23 +246,93 @@ it('返修核对真实工作树、Git 分支与 Pi 会话，在目标会话保�
   context.workspace.previous = prior;
   agent.useSession(original);
   const status = async () => (await agent.call('steward_task')).details;
-  expect(await status()).toMatchObject({ reworkWorkspace: 'switch_required' });
+  expect(await status()).toMatchObject({ reworkWorkspace: 'confirmed', workspaceStatus: 'not_required' });
   agent.useSession(savedSession(linked, storage));
-  expect(await status()).toMatchObject({ reworkWorkspace: 'switch_required' });
+  expect(await status()).toMatchObject({ reworkWorkspace: 'confirmed' });
   agent.useSession(SessionManager.open(workspaceInfo.sessionFile));
   expect(await status()).toMatchObject({ reworkWorkspace: 'confirmed' });
   git(root, 'worktree', 'move', linked, join(directory, 'moved'));
-  expect(await status()).toMatchObject({ reworkWorkspace: 'unavailable' });
+  expect(await status()).toMatchObject({ reworkWorkspace: 'confirmed' });
   git(root, 'worktree', 'move', join(directory, 'moved'), linked);
   git(linked, 'switch', '-c', 'unexpected');
-  expect(await status()).toMatchObject({ reworkWorkspace: 'mismatch' });
+  expect(await status()).toMatchObject({ reworkWorkspace: 'confirmed' });
   git(linked, 'switch', 'feature/old');
   rmSync(workspaceInfo.sessionFile);
-  expect(await status()).toMatchObject({ reworkWorkspace: 'unavailable' });
+  expect(await status()).toMatchObject({ reworkWorkspace: 'confirmed' });
   context.workspace.previous = { ...prior, sameMachine: false, workspace: null };
-  expect(await status()).toMatchObject({ reworkWorkspace: 'different_machine' });
+  expect(await status()).toMatchObject({ reworkWorkspace: 'confirmed' });
   context.workspace.previous = null;
-  expect(await status()).toMatchObject({ reworkWorkspace: 'not_recorded' });
+  expect(await status()).toMatchObject({ reworkWorkspace: 'confirmed' });
+});
+
+it('准备、切换与读任务自动登记真实 Git 现场，不依赖手工记录', async () => {
+  const directory = realpathSync(workspace());
+  const root = join(directory, 'repo'); const linked = join(directory, 'linked'); mkdirSync(root);
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+  git(root, 'init', '-b', 'main');
+  git(root, '-c', 'user.name=Steward', '-c', 'user.email=fixture@example.test', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'fixture');
+  const context = { ...taskContext(root), implementationAllowed: true };
+  context.git = { baseBranch: 'main', baseCommit: git(root, 'rev-parse', 'HEAD'), taskBranch: 'feature/old', repositoryPath: root,
+    worktreePath: null, machineId: randomUUID(), syncBeforeStart: false, syncResult: 'disabled', phase: 'prepared',
+    operationId: null, deliveryId: null, approvedCommit: null, mergedCommit: null, message: null };
+  const expectedSession: { id?: string } = {};
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    if (String(url).endsWith('/context')) return Response.json(context);
+    if (String(url).endsWith('/workspace')) {
+      const { workspace: saved } = JSON.parse(String(init?.body));
+      if (expectedSession.id && saved.sessionId !== expectedSession.id) return Response.json({ error: { code: 'conflict', message: 'Original session required' } }, { status: 409 });
+      context.git = { ...context.git!, worktreePath: saved.gitRoot, taskBranch: saved.gitBranch, phase: 'ready' };
+    }
+    return Response.json({ ok: true });
+  });
+  const posts = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith('/workspace'));
+  const agent = mockTools(fetcher, { attemptId: context.attempt.id, config: configFile() });
+  agent.useSession(savedSession(root, join(directory, 'sessions')));
+  expect((await agent.call('steward_prepare_git', { taskBranch: 'feature/old' })).details).toMatchObject({ workspaceStatus: 'prepared' });
+  expect(posts()).toHaveLength(0);
+  expect((await agent.call('steward_task')).details).toMatchObject({ workspaceStatus: 'prepared', next: expect.stringContaining('确认前不在主目录写代码') });
+  context.attempt.kind = 'rework';
+  expect((await agent.call('steward_task')).details).toMatchObject({ reworkWorkspace: 'not_recorded', next: expect.stringContaining('steward_ask') });
+  context.attempt.kind = 'new';
+  git(root, 'worktree', 'add', '-b', 'feature/old', linked);
+  writeFileSync(join(git(linked, 'rev-parse', '--absolute-git-dir'), 'pi-worktree-manager.json'), JSON.stringify({ schemaVersion: 1, createdAt: new Date().toISOString() }));
+  const pending = SessionManager.create(linked, join(directory, 'sessions'));
+  agent.useSession(pending);
+  expect((await agent.call('steward_task')).details).toMatchObject({ workspaceStatus: 'pending_session' });
+  expect(posts()).toHaveLength(0);
+  pending.appendMessage({ role: 'user', content: 'migrated', timestamp: 1 });
+  expectedSession.id = pending.getSessionId();
+  await agent.fire('session_start', { reason: 'resume' });
+  expect(posts()).toHaveLength(1);
+  context.attempt.kind = 'rework'; context.workspace.previous = null;
+  expect((await agent.call('steward_task')).details).toMatchObject({ workspaceStatus: 'confirmed', reworkWorkspace: 'confirmed' });
+  git(linked, 'switch', '-c', 'feature/renamed');
+  writeFileSync(join(linked, 'unknown'), 'keep');
+  expect((await agent.call('steward_task')).details).toEqual({ code: 'git_workspace_unverified' });
+  rmSync(join(linked, 'unknown'));
+  expect((await agent.call('steward_task')).details).toMatchObject({ git: { taskBranch: 'feature/renamed' }, reworkWorkspace: 'confirmed' });
+  agent.useSession(savedSession(linked, join(directory, 'sessions')));
+  expect((await agent.call('steward_deliver', { ...delivery, commit: context.git!.baseCommit })).details).toEqual({ code: 'git_workspace_unverified' });
+  expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/deliveries'))).toBe(false);
+  agent.useSession(savedSession(root, join(directory, 'sessions')));
+  expect((await agent.call('steward_task')).details).toMatchObject({ workspaceStatus: 'switch_required', reworkWorkspace: 'switch_required', next: expect.stringContaining('原会话') });
+  agent.useSession(pending);
+  git(root, 'worktree', 'move', linked, join(directory, 'moved'));
+  expect((await agent.call('steward_task')).details).toEqual({ code: 'git_workspace_unverified' });
+  await agent.fire('session_shutdown');
+});
+
+it.each(['结束讨论', '结束当前任务', '就到这吧'])('Agent 根据用户明确意图登记讨论结束：%s', async (reason) => {
+  let ended = false;
+  const fetcher = vi.fn<typeof fetch>(async (url) => {
+    if (String(url).endsWith('/control')) return Response.json({ type: 'discussion', waitId: null, discussionEndRequested: ended, deliverySaved: false });
+    if (String(url).endsWith('/end-discussion')) ended = true;
+    return Response.json({ ok: true });
+  });
+  const agent = mockTools(fetcher, { attemptId: randomUUID(), config: configFile() });
+  expect((await agent.call('steward_end_discussion', { reason, authorizedByUser: true })).details).toEqual({ ok: true, discussionEndRequested: true });
+  expect(ended).toBe(true);
+  expect(agent.registerTool.mock.calls.find(([tool]) => tool.name === 'steward_end_discussion')?.[0].description).toContain('已有结论、无人回复或回合结束不算结束');
 });
 
 it('普通 Pi 使用配对令牌查、建、改任务，写入附带当前会话 ID', async () => {

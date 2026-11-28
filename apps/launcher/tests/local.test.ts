@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { LocalConfig } from '@pi-steward/contract';
+import { LAUNCHER_TASK_TITLE_HEADER, type LocalConfig } from '@pi-steward/contract';
 import { afterEach, expect, it, vi } from 'vitest';
 import { configPath, readConfig, writeConfig } from '../src/config.js';
 import { platformClient } from '../src/platform.js';
@@ -17,7 +17,7 @@ afterEach(() => { for (const path of homes.splice(0)) rmSync(path, { recursive: 
 const config: LocalConfig = { platformUrl: 'https://steward.example', machineToken: `stm_${randomBytes(32).toString('base64url')}`,
   slots: 1, projects: [], path: ['/mock/node', '/usr/bin'], pi: { command: '/mock/Pi tools/pi', extraArgs: ['--flag', '中文 $HOME'] } };
 
-it('tmux 使用参数数组、精确目标、显式 PATH，并只把处理后的标题传给 Pi', async () => {
+it('tmux 使用参数数组、精确目标、显式 PATH，窗口名处理与任务原始标题分离', async () => {
   type Runner = NonNullable<Parameters<typeof tmuxClient>[1]['run']>;
   const run = vi.fn().mockResolvedValue({ stdout: '', stderr: '' });
   const tmux = tmuxClient(config, { configPath: '/mock/config;', extensionPath: '/mock/extension/index.js', run: run as Runner, env: {} });
@@ -27,15 +27,26 @@ it('tmux 使用参数数组、精确目标、显式 PATH，并只把处理后的
   const display = '-@中文\n第二行;#{pane_id}';
   await tmux.launch(target, { id, taskId: randomUUID(), projectId: 'mock', kind: 'rework', restoreSession: true,
     sessionLocator: { path: '/mock/项目 #{};', sessionId: oldSession, sessionFile: '/sessions/exact.jsonl' },
-    agent: 'pi', sessionId: oldSession, displayName: display }, '/registered/project');
+    agent: 'pi', sessionId: oldSession, displayName: display, title: '讨论「方案 A～F」' }, '/registered/project');
   expect(run).toHaveBeenCalledWith('tmux', ['-L', 'steward', '-u', '-f', '/dev/null', 'new-session', '-d', '-s', target,
     '-c', '/mock/项目 ##{};/.', '-e', 'STEWARD_RESUME=1', '-e', `STEWARD_ATTEMPT_ID=${id}`, '-e', 'STEWARD_CONFIG=/mock/config\\;', '-e', 'PATH=/mock/node:/usr/bin',
     '--', config.pi.command, '--flag', '中文 $HOME', '-e', '/mock/extension/index.js', '--session', '/sessions/exact.jsonl',
-    '-n', '中文 第二行   pane_id', '--', expect.stringMatching(/^返修本任务。先调用 steward_task/u)],
+    '-n', '中文 第二行   pane_id', '--', '返修：讨论「方案 A～F」\n先调用 steward_task 读取目标、验收要求和授权。'],
   expect.objectContaining({ env: expect.objectContaining({ PATH: '/mock/node:/usr/bin' }) }));
   await tmux.cancel(target);
   expect(run.mock.lastCall?.[1]).toContain(`=${target}`);
   expect(displayName('-@;')).toBe('Pi task');
+});
+
+it.each([true, false])('新任务开工消息只包含原始标题和读任务指引，旧平台兼容=%s', async (legacy) => {
+  type Runner = NonNullable<Parameters<typeof tmuxClient>[1]['run']>;
+  const run = vi.fn().mockResolvedValue({ stdout: '', stderr: '' });
+  const tmux = tmuxClient(config, { configPath: '/mock/config', extensionPath: '/mock/extension', run: run as Runner, env: {} });
+  const id = randomUUID();
+  const title = `带标点的任务「${'长标题'.repeat(40)}」`;
+  await tmux.launch(targetFor(id), { id, taskId: randomUUID(), projectId: 'mock', kind: 'new', restoreSession: false,
+    agent: 'pi', sessionId: id, displayName: '窗口名', ...(legacy ? {} : { title }) }, '/project');
+  expect(run.mock.lastCall?.[1].at(-1)).toBe(`新任务：${legacy ? '窗口名' : title}\n先调用 steward_task 读取目标、验收要求和授权。`);
 });
 
 it('恢复命令不携带新会话 ID、名称或消息；只使用原文件和显式恢复环境', async () => {
@@ -230,6 +241,17 @@ it('第二个 run 锁失败，前一个退出后可再次取得', () => {
   const release = acquireRunLock(path);
   try { expect(() => acquireRunLock(path)).toThrow(/启动器锁/u); } finally { release(); }
   acquireRunLock(path)();
+});
+
+it('领取通过能力头声明原始标题支持，不改变请求体或跨版本重试编号', async () => {
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ attempt: null }));
+  const client = platformClient(config, fetcher);
+  const requestId = randomUUID();
+  await client.claim(requestId); await client.claim(requestId);
+  for (const [, init] of fetcher.mock.calls) {
+    expect(JSON.parse(String(init?.body))).toEqual({ requestId });
+    expect(new Headers(init?.headers).get(LAUNCHER_TASK_TITLE_HEADER)).toBe('1');
+  }
 });
 
 it('HTTP 设置截止时间和禁止重定向，错误不回显平台消息', async () => {

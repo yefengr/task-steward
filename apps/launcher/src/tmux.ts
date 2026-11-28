@@ -4,7 +4,7 @@ import type { ClaimedAttempt, LocalConfig, PiSessionLocator } from '@pi-steward/
 
 const runFile = promisify(execFile);
 const escapedTmuxArg = (value: string) => value.endsWith(';') ? `${value.slice(0, -1)}\\;` : value;
-const instructions = '先调用 steward_task 读取完整任务背景，确认任务类型后再行动。遵守项目规则和任务授权；需要用户回应时调用 steward_ask 并在当前会话等待。实现任务按目标执行和验证，在关键节点调用 steward_progress，完成后调用 steward_deliver 和 steward_finish。讨论任务围绕目标交流，即使已经有结论也不自动收尾；只有收到 Steward 确认的结束请求才整理结论和未决事项、保存交付并退出。';
+const instructions = '先调用 steward_task 读取目标、验收要求和授权。';
 export const targetFor = (id: string) => `steward-${id}`;
 
 export type TmuxHealth = 'ready' | 'missing' | 'unavailable';
@@ -103,7 +103,7 @@ export function tmuxClient(config: LocalConfig, options: {
       }
     },
     async launch(target: string, claim: ClaimedAttempt, projectPath: string) {
-      const message = `${claim.kind === 'rework' ? '返修本任务。' : '开始执行本任务。'}${instructions}`;
+      const message = `${claim.kind === 'rework' ? '返修' : '新任务'}：${claim.title ?? claim.displayName}\n${instructions}`;
       const locator = claim.sessionLocator;
       if (claim.kind === 'rework' && !locator) throw new TmuxError(true);
       try {

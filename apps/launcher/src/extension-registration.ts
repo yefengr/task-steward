@@ -95,6 +95,6 @@ export async function runExtensionCommand(argv: readonly string[], options: Exte
   if (command === 'path') return root;
   await delegate(command, root, options, options.exec ?? defaultExec);
   return command === 'install'
-    ? `已通过 Pi 登记 Steward 扩展：${root}`
+    ? `已通过 Pi 登记 Steward 扩展：${root}\n新开 Pi 加载扩展；升级后正在运行的 Pi 需重启，使用工作台「重启 Pi 会话」或退出后重新打开。`
     : `已通过 Pi 移除 Steward 扩展登记：${root}`;
 }

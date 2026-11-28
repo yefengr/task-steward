@@ -109,25 +109,18 @@ export async function checkReworkWorkspace(ctx: LocationContext, data: AgentCont
   if (data.task.type !== 'implementation' || data.attempt.kind === 'resume') return undefined;
   const previous = data.workspace.previous;
   if (previous === undefined && data.attempt.kind !== 'rework' && data.deliveries.at(-1)?.review !== 'rework') return undefined;
-  if (!previous) return 'not_recorded';
-  if (!previous.sameMachine) return 'different_machine';
-  const saved = previous.workspace;
-  if (!saved) return 'not_recorded';
+  // 未准备 Git 的任务不需要手工现场记录；专用树以 Git 快照为准。
+  if (!data.git) return 'confirmed';
+  if (!data.git.worktreePath) return 'not_recorded';
   try {
-    const [path, registered, sessionFile] = await Promise.all([
-      realpath(saved.path), realpath(data.workspace.path), realpath(saved.sessionFile),
+    const [path, registered, cwd] = await Promise.all([
+      realpath(data.git.worktreePath), realpath(data.git.repositoryPath), realpath(ctx.cwd),
     ]);
-    if (path !== saved.path || sessionFile !== saved.sessionFile) return 'mismatch';
-    const [layout, registeredLayout, header] = await Promise.all([gitLayout(path), gitLayout(registered), readHeader(sessionFile)]);
-    if (!sameRepository(registeredLayout, layout) || (layout.kind === 'non_git' && path !== registered) ||
-        layout.kind !== saved.gitKind || layout.branch !== saved.gitBranch || header.id !== saved.sessionId || header.path !== path) {
-      return 'mismatch';
-    }
-    if (layout.kind !== 'non_git' && layout.branch === null) return 'unverifiable';
-    if (await realpath(ctx.cwd) !== path) return 'switch_required';
-    const session = ctx.sessionManager.getSessionFile();
-    if (session && ctx.sessionManager.getSessionId() === saved.sessionId && await realpath(session) === sessionFile &&
-        await realpath(ctx.sessionManager.getCwd()) === path) return 'confirmed';
-    return 'switch_required';
+    if (path !== data.git.worktreePath) return 'mismatch';
+    if (cwd !== path && !cwd.startsWith(`${path}/`)) return 'switch_required';
+    const [layout, registeredLayout] = await Promise.all([gitLayout(path), gitLayout(registered)]);
+    if (!sameRepository(registeredLayout, layout) || layout.kind !== 'linked' || layout.branch !== data.git.taskBranch) return 'mismatch';
+    // 本地仅核对快照及会话文件有效性；原会话归属由自动登记和交付前的 /workspace 平台校验负责。
+    return await currentSessionLocator(ctx, true) ? 'confirmed' : 'unavailable';
   } catch { return 'unavailable'; }
 }

@@ -2,7 +2,9 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import type { ExtensionAPI, ExtensionToolContext } from '@earendil-works/pi-coding-agent';
+import { registerSteward } from '../src/index.js';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import type { AgentContextResponse, TaskGit } from '@pi-steward/contract';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -81,7 +83,7 @@ it.each(['remote-ahead', 'local-ahead', 'diverged', 'no-upstream', 'disabled', '
   expect(prepared.syncResult).toBe(mode === 'disabled' ? 'disabled' : mode === 'no-upstream' ? 'no_upstream' : 'synced');
   expect(g(x.root, 'rev-parse', 'main')).toBe(expected);
 });
-it.each(['main', 'linked'] as const)('remote advancement blocks when base is checked out in %s', async (checkout) => {
+it.each(['main', 'linked'] as const)('remote advancement uses fetched commit without modifying checked out base in %s', async (checkout) => {
   const x = fixture(); const bare = join(x.dir, 'upstream.git'); g(x.root, 'init', '--bare', bare);
   g(x.root, 'remote', 'add', 'origin', bare); g(x.root, 'push', '-u', 'origin', 'main');
   const other = join(x.dir, 'other'); g(x.root, 'clone', '-b', 'main', bare, other);
@@ -91,15 +93,24 @@ it.each(['main', 'linked'] as const)('remote advancement blocks when base is che
   if (checkout === 'main') g(x.root, 'checkout', 'main');
   else g(x.root, 'worktree', 'add', target, 'main');
   const maintenance = g(x.root, 'rev-parse', 'maintenance');
-  await expect(prepareGit(x.data, 'feature/task')).rejects.toMatchObject({ code: 'git_base_checked_out' });
+  await expect(prepareGit(x.data, 'feature/task')).resolves.toMatchObject({ baseCommit: remote, syncResult: 'synced' });
   expect(g(x.root, 'rev-parse', 'main')).toBe(x.base);
   expect(g(x.root, 'rev-parse', 'maintenance')).toBe(maintenance);
   expect(g(target, 'rev-parse', 'HEAD')).toBe(x.base);
   expect(g(target, 'status', '--porcelain')).toBe('');
   expect(existsSync(join(target, 'remote'))).toBe(false);
-  // 由维护者主动推进后，同一已检出目录允许安全 no-op。
+  // 本地相同或领先仍使用本地，dirty / locked 不能被远端起点路径绕过。
   g(target, 'merge', '--ff-only', remote);
   await expect(prepareGit(x.data, 'feature/task')).resolves.toMatchObject({ baseCommit: remote, syncResult: 'synced' });
+  const local = commit(target, 'local');
+  await expect(prepareGit(x.data, 'feature/task')).resolves.toMatchObject({ baseCommit: local });
+  writeFileSync(join(target, 'dirty'), 'keep');
+  await expect(prepareGit(x.data, 'feature/task')).rejects.toMatchObject({ code: 'git_dirty' });
+  rmSync(join(target, 'dirty'));
+  if (checkout === 'linked') {
+    g(x.root, 'worktree', 'lock', target);
+    await expect(prepareGit(x.data, 'feature/task')).rejects.toMatchObject({ code: 'git_worktree_locked' });
+  }
 });
 it('sync advances only the base ref, not an unrelated checked-out branch or its files', async () => {
   const x = fixture(); const bare = join(x.dir, 'upstream.git'); g(x.root, 'init', '--bare', bare);
@@ -132,6 +143,33 @@ it('sync CAS rejects a concurrent base change without overwriting any branch or 
   expect(g(x.root, 'status', '--porcelain')).toBe('');
   expect(existsSync(join(x.root, 'remote'))).toBe(false);
 });
+it('steward_task automatically confirms a durable owned workspace and tracks a clean branch change', async () => {
+  const x = fixture(), linked = join(x.dir, 'linked');
+  g(x.root, 'worktree', 'add', '-b', 'feature/task', linked, x.base);
+  writeFileSync(join(g(linked, 'rev-parse', '--absolute-git-dir'), 'pi-worktree-manager.json'), JSON.stringify({ schemaVersion: 1, createdAt: new Date().toISOString() }));
+  x.data.implementationAllowed = true;
+  x.data.git = { baseBranch: 'main', baseCommit: x.base, taskBranch: 'feature/task', repositoryPath: x.root, worktreePath: linked,
+    machineId: randomUUID(), syncBeforeStart: false, syncResult: 'disabled', phase: 'ready', operationId: null, deliveryId: null,
+    approvedCommit: null, mergedCommit: null, message: null };
+  x.data.attempt.kind = 'rework'; x.data.workspace.previous = null;
+  const session = SessionManager.create(linked, join(x.dir, 'sessions'));
+  session.appendMessage({ role: 'user', content: 'rework', timestamp: Date.now() });
+  const config = join(x.dir, 'config.json');
+  writeFileSync(config, JSON.stringify({ platformUrl: 'https://example.invalid', machineToken: `stm_${randomBytes(32).toString('base64url')}`, slots: 1, projects: [], path: ['/usr/bin'], pi: { command: 'pi', extraArgs: [] } }), { mode: 0o600 });
+  const fetcher = vi.fn<typeof fetch>(async (url, options) => {
+    if (String(url).endsWith('/workspace')) x.data.git!.taskBranch = JSON.parse(String(options?.body)).workspace.gitBranch;
+    return Response.json(String(url).endsWith('/context') ? x.data : { ok: true });
+  });
+  const registerTool = vi.fn<ExtensionAPI['registerTool']>();
+  registerSteward({ registerTool, on: vi.fn() } as unknown as ExtensionAPI, { env: { STEWARD_ATTEMPT_ID: x.data.attempt.id, STEWARD_CONFIG: config }, fetcher });
+  const tool = registerTool.mock.calls.map(([tool]) => tool).find((tool) => tool.name === 'steward_task')!;
+  const ctx = { cwd: linked, sessionManager: session } as unknown as ExtensionToolContext;
+  expect((await tool.execute('1', {}, undefined, undefined, ctx)).details).toMatchObject({ workspaceStatus: 'confirmed', reworkWorkspace: 'confirmed' });
+  g(linked, 'switch', '-c', 'feature/renamed');
+  expect((await tool.execute('2', {}, undefined, undefined, ctx)).details).toMatchObject({ workspaceStatus: 'confirmed', git: { taskBranch: 'feature/renamed' } });
+  expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/workspace'))).toHaveLength(2);
+});
+
 it('snapshot delivery proves canonical owned linked branch, exact SHA, clean tree and durable session', async () => {
   const x = fixture(); const linked = join(x.dir, 'linked');
   g(x.root, 'worktree', 'add', '-b', 'feature/task', linked, x.base);
@@ -166,6 +204,14 @@ it('snapshot delivery proves canonical owned linked branch, exact SHA, clean tre
   await expect(proveWorkspace(ctx, x.data, { baseCommit: x.base, commit: 'a'.repeat(40) })).rejects.toMatchObject({ code: 'git_workspace_unverified' });
   writeFileSync(join(linked, 'dirty'), 'dirty');
   await expect(proveWorkspace(ctx, x.data, { baseCommit: x.base, commit: x.base })).rejects.toMatchObject({ code: 'git_workspace_unverified' });
+  rmSync(join(linked, 'dirty'));
+  g(linked, 'switch', '-c', 'feature/renamed');
+  await expect(proveWorkspace(ctx, x.data)).resolves.toMatchObject({ gitBranch: 'feature/renamed' });
+  writeFileSync(join(linked, 'dirty'), 'unknown source');
+  await expect(proveWorkspace(ctx, x.data)).rejects.toMatchObject({ code: 'git_workspace_unverified' });
+  rmSync(join(linked, 'dirty')); g(linked, 'switch', 'feature/task');
+  writeFileSync(join(linked, 'dirty'), 'own normal work');
+  await expect(proveWorkspace(ctx, x.data)).resolves.toMatchObject({ gitBranch: 'feature/task' });
   rmSync(join(linked, 'dirty')); g(x.root, 'worktree', 'lock', linked);
   await expect(proveWorkspace(ctx, x.data)).rejects.toMatchObject({ code: 'git_workspace_unverified' });
   g(x.root, 'worktree', 'unlock', linked); rmSync(join(dir, 'pi-worktree-manager.json'));

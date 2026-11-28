@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { LocalConfig } from '@pi-steward/contract';
+import { LAUNCHER_TASK_TITLE_HEADER, type LocalConfig } from '@pi-steward/contract';
 import { afterEach, expect, it, vi } from 'vitest';
 import { configPath, readConfig, writeConfig } from '../src/config.js';
 import { platformClient } from '../src/platform.js';
@@ -241,6 +241,17 @@ it('第二个 run 锁失败，前一个退出后可再次取得', () => {
   const release = acquireRunLock(path);
   try { expect(() => acquireRunLock(path)).toThrow(/启动器锁/u); } finally { release(); }
   acquireRunLock(path)();
+});
+
+it('领取通过能力头声明原始标题支持，不改变请求体或跨版本重试编号', async () => {
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ attempt: null }));
+  const client = platformClient(config, fetcher);
+  const requestId = randomUUID();
+  await client.claim(requestId); await client.claim(requestId);
+  for (const [, init] of fetcher.mock.calls) {
+    expect(JSON.parse(String(init?.body))).toEqual({ requestId });
+    expect(new Headers(init?.headers).get(LAUNCHER_TASK_TITLE_HEADER)).toBe('1');
+  }
 });
 
 it('HTTP 设置截止时间和禁止重定向，错误不回显平台消息', async () => {

@@ -27,7 +27,7 @@ export function mountMachineRoutes(store: Store, now: () => number) {
   const authenticate = (context: Context) => requireMachineAuth(store, context.req.header('Authorization'));
   const launcherWrite = <T extends { requestId: string }, R>(operation: string, input: z.ZodType<T>, output: z.ZodType<R>,
     apply: (machineId: string, body: T, time: number, attempt: AttemptRow, target: string) => R,
-    scope?: 'attempt' | 'session', project?: (response: R, machineId: string, time: number) => R) => async (context: Context) => {
+    scope?: 'attempt' | 'session', project?: (response: R, machineId: string, time: number, context: Context) => R) => async (context: Context) => {
     authenticate(context);
     const body = await jsonInput(context, input);
     const target = scope ? routeParam(context.req.param('id'), c.uuidSchema) : '';
@@ -37,7 +37,7 @@ export function mountMachineRoutes(store: Store, now: () => number) {
       const time = now();
       const saved = store.request({ machineId, actor: 'launcher', operation, target }, body, time,
         () => output.parse(apply(machineId, body, time, attempt!, target)));
-      return project ? output.parse(project(saved, machineId, time)) : saved;
+      return project ? output.parse(project(saved, machineId, time, context)) : saved;
     });
     return context.json(response as object);
   };
@@ -56,7 +56,13 @@ export function mountMachineRoutes(store: Store, now: () => number) {
         .filter(({ id, step }) => issued.get(id) === step) };
     }));
   api.post('/launcher/claim', launcherWrite('claim', c.launcherClaimRequestSchema, c.launcherClaimResponseSchema,
-    (machineId, _body, time) => claim(store, machineId, time)));
+    (machineId, _body, time) => claim(store, machineId, time), undefined, (response, _machineId, _time, context) => {
+      if (!response.attempt || context.req.header(c.LAUNCHER_TASK_TITLE_HEADER) === '1') return response;
+      // 能力按当前请求投影，不改幂等请求体；升级前留下的领取也能以同一编号恢复。
+      const legacy = { ...response.attempt };
+      delete legacy.title;
+      return { attempt: legacy };
+    }));
   api.post('/launcher/attempts/:id/started', launcherWrite('started', c.launcherStartedRequestSchema, c.launcherStartedResponseSchema,
     (_machineId, body, time, attempt) => started(store, attempt, body, time), 'attempt'));
   api.post('/launcher/attempts/:id/exited', launcherWrite('exited', c.launcherExitedRequestSchema, c.launcherExitedResponseSchema,

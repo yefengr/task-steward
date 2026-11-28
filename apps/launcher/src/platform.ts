@@ -24,7 +24,8 @@ export function platformClient(config: c.LocalConfig, fetcher?: typeof fetch, ge
       const url = `${origin}/api/v1/launcher/${path}`;
       const init: RequestInit = {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        headers: { Authorization: `Bearer ${machineToken}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${machineToken}`, 'Content-Type': 'application/json',
+          ...(path === 'claim' ? { [c.LAUNCHER_TASK_TITLE_HEADER]: '1' } : {}) },
         body: JSON.stringify(body),
       };
       res = await (fetcher ? fetcher(url, init) : platformFetch(url, init, config.proxy));

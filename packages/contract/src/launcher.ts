@@ -22,6 +22,7 @@ export const launcherHeartbeatResponseSchema = z.strictObject({
   sessionOperations: z.array(launcherSessionDirectiveSchema).optional(),
   gitOperations: z.array(launcherGitOperationSchema).optional(),
 });
+export const LAUNCHER_TASK_TITLE_HEADER = 'X-Steward-Task-Title';
 export const launcherClaimRequestSchema = requestIdSchema;
 export const claimedAttemptSchema = z.strictObject({
   id: uuidSchema, taskId: uuidSchema, projectId: projectIdSchema, agent: z.literal('pi'),

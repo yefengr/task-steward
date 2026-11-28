@@ -155,11 +155,12 @@ it('普通回合保持讨论运行，工作台请求在 Pi 空闲后只触发一
   await f.fire('session_shutdown');
 });
 
-it.each(['interactive', 'extension'] as const)('用户的结束讨论输入持久化后续恢复，保留原用户消息（%s）', async (source) => {
+it('Agent 登记结束的未知结果持久化后按原请求重试', async () => {
   const f = fixture();
   await f.start();
-  f.setOffline(true);
-  await f.fire('input', { source, text: '结束讨论' });
+  f.request.mockImplementationOnce(async () => ({ ...f.state }));
+  f.request.mockImplementationOnce(async () => { throw new AgentError('network_error'); });
+  await expect(f.control.endDiscussion()).rejects.toMatchObject({ code: 'network_error' });
   const original = f.request.mock.calls.find(([, route]) => route === 'end-discussion')?.[3];
   expect(original).toEqual({ requestId: expect.any(String) });
   expect(f.sendMessage).not.toHaveBeenCalled();
@@ -173,21 +174,41 @@ it.each(['interactive', 'extension'] as const)('用户的结束讨论输入持�
   await f.fire('session_shutdown');
 });
 
-it('首次读取任务类型前就离线，本地结束意图在重载后恢复且不会被误认作回复', async () => {
+it('首次读取任务类型失败不伪称结束已登记，恢复后可重试', async () => {
   const f = fixture();
-  f.state.waitId = randomUUID();
   f.setOffline(true);
   await f.start();
-  await f.fire('input', { source: 'extension', text: '结束讨论' });
+  await expect(f.control.endDiscussion()).rejects.toMatchObject({ code: 'network_error' });
   expect(f.state.discussionEndRequested).toBe(false);
-  await f.fire('session_shutdown');
-  f.register();
   f.setOffline(false);
-  await f.start();
-  expect(f.state.discussionEndRequested).toBe(true);
-  expect(f.state.waitId).not.toBeNull();
-  expect(f.request.mock.calls.some(([, route]) => route === 'reply')).toBe(false);
-  expect(f.sendMessage).toHaveBeenCalledTimes(1);
+  await expect(f.control.endDiscussion()).resolves.toEqual({ ok: true, discussionEndRequested: true });
+  await f.fire('session_shutdown');
+});
+
+it.each(['结束讨论', '结束当前任务', '就到这吧', '不用结束讨论，继续分析', '已经有结论了'])('原输入不再由正则抢先结束：%s', async (text) => {
+  const f = fixture(); await f.start();
+  await f.fire('input', { source: 'interactive', text }); await f.tick();
+  expect(f.state.discussionEndRequested).toBe(false);
+  expect(f.sendMessage).not.toHaveBeenCalled();
+  const promptGuidelines: string[] = [];
+  await f.fire('before_agent_start', { systemPromptOptions: { promptGuidelines } });
+  expect(promptGuidelines).toEqual([]);
+  await f.fire('session_shutdown');
+});
+
+it('误判后续做清除结束状态，旧工作段的离线结束请求不污染新段', async () => {
+  const f = fixture(); f.state.workRevision = 0; await f.start();
+  await f.control.endDiscussion();
+  expect(f.control.discussionEndConfirmed).toBe(true);
+  f.state.workRevision = 1; f.state.discussionEndRequested = false;
+  await f.tick();
+  expect(f.control.discussionEndConfirmed).toBe(false);
+  f.request.mockImplementationOnce(async () => ({ ...f.state }));
+  f.request.mockImplementationOnce(async () => { throw new AgentError('network_error'); });
+  await expect(f.control.endDiscussion()).rejects.toMatchObject({ code: 'network_error' });
+  await f.fire('session_shutdown');
+  f.state.workRevision = 2; f.register(); await f.start();
+  expect(f.state.discussionEndRequested).toBe(false);
   await f.fire('session_shutdown');
 });
 
@@ -204,7 +225,8 @@ it('无交付的收尾回合有限重试，仍未完成时不关闭会话并告�
   expect(f.sendMessage).toHaveBeenCalledTimes(3);
   expect(f.notify).toHaveBeenCalledTimes(1);
   expect(f.shutdown).not.toHaveBeenCalled();
-  await f.fire('input', { source: 'interactive', text: '结束讨论' });
+  f.state.discussionEndRequested = false;
+  await f.control.endDiscussion();
   await f.tick();
   expect(f.sendMessage).toHaveBeenCalledTimes(4);
   await f.fire('session_shutdown');
@@ -255,5 +277,6 @@ it('实现任务的结束讨论字样不是收尾指令', async () => {
   expect(f.request.mock.calls.some(([, route]) => route === 'end-discussion')).toBe(false);
   expect(f.sendMessage).not.toHaveBeenCalled();
   expect(f.shutdown).not.toHaveBeenCalled();
+  await expect(f.control.endDiscussion()).rejects.toMatchObject({ code: 'discussion_required' });
   await f.fire('session_shutdown');
 });

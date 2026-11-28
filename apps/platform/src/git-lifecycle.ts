@@ -60,7 +60,7 @@ export function prepareGit(store: Store, attempt: AttemptRow, input: AgentPrepar
   if (!project || project.local_path !== input.repositoryPath || !settings.baseBranch || input.baseBranch !== settings.baseBranch ||
       input.taskBranch === input.baseBranch || input.syncBeforeStart !== settings.syncBeforeStart ||
       (input.syncBeforeStart ? input.syncResult === 'disabled' : input.syncResult !== 'disabled')) reject('conflict', 'Git preparation does not match project configuration');
-  for (const row of store.all<{ task_id: string; snapshot: string }>('SELECT * FROM task_git')) {
+  for (const row of store.all<{ task_id: string; snapshot: string }>("SELECT task_git.* FROM task_git JOIN tasks ON tasks.id=task_git.task_id WHERE tasks.status<>'cancelled'")) {
     const other = JSON.parse(row.snapshot) as TaskGit;
     if (other.machineId === attempt.machine_id && other.repositoryPath === input.repositoryPath && other.taskBranch === input.taskBranch) reject('conflict', 'Task branch is already assigned');
   }
@@ -73,21 +73,25 @@ export function prepareGit(store: Store, attempt: AttemptRow, input: AgentPrepar
 export function confirmGitWorkspace(store: Store, attempt: AttemptRow, workspace: AttemptWorkspace) {
   const git = gitState(store, attempt.task_id);
   if (!git) return;
-  if ((attempt.kind === 'rework' || isContinuedWork(store, attempt)) &&
+  if ((attempt.kind === 'rework' || isContinuedWork(store, attempt) || workspace.gitBranch !== git.taskBranch) &&
       !sameLocator(confirmedLocator(attempt) ?? attemptLocator(attempt), workspace)) {
     reject('conflict', 'Git rework must retain the original confirmed session and workspace');
   }
-  if (git.machineId !== attempt.machine_id || workspace.gitKind !== 'linked' || workspace.gitBranch !== git.taskBranch ||
+  if (git.machineId !== attempt.machine_id || workspace.gitKind !== 'linked' || !workspace.gitBranch || workspace.gitBranch === git.baseBranch ||
       !workspace.gitRoot || workspace.gitRoot === git.repositoryPath ||
       (workspace.path !== workspace.gitRoot && !workspace.path.startsWith(`${workspace.gitRoot}/`)) ||
       (git.worktreePath !== null && git.worktreePath !== workspace.gitRoot) || !['prepared', 'ready', 'needs_rework'].includes(git.phase)) {
     reject('conflict', 'Workspace does not match the dedicated prepared Git branch');
   }
-  for (const row of store.all<{ task_id: string; snapshot: string }>('SELECT * FROM task_git WHERE task_id<>?', attempt.task_id)) {
+  for (const row of store.all<{ task_id: string; snapshot: string }>("SELECT task_git.* FROM task_git JOIN tasks ON tasks.id=task_git.task_id WHERE task_id<>? AND tasks.status<>'cancelled'", attempt.task_id)) {
     const other = JSON.parse(row.snapshot) as TaskGit;
-    if (other.machineId === git.machineId && other.worktreePath === workspace.gitRoot) reject('conflict', 'Worktree belongs to another task');
+    if (other.machineId === git.machineId && (other.worktreePath === workspace.gitRoot ||
+        (other.repositoryPath === git.repositoryPath && other.taskBranch === workspace.gitBranch))) reject('conflict', 'Worktree or branch belongs to another task');
   }
-  save(store, attempt.task_id, { ...git, worktreePath: workspace.gitRoot, phase: 'ready' });
+  if (workspace.gitBranch !== git.taskBranch && !git.worktreePath) reject('conflict', 'Initial workspace must use the prepared branch');
+  if (workspace.gitBranch !== git.taskBranch) store.run('INSERT INTO progress VALUES (?,?,?,?,?)', randomUUID(), attempt.task_id, attempt.id,
+    `原任务工作树分支已由 ${git.taskBranch} 变更为 ${workspace.gitBranch}，已核验并登记实际分支。`, Date.now());
+  save(store, attempt.task_id, { ...git, taskBranch: workspace.gitBranch, worktreePath: workspace.gitRoot, phase: 'ready' });
   store.run('UPDATE attempts SET confirmed_git_root=? WHERE id=?', workspace.gitRoot, attempt.id);
 }
 export function checkGitDelivery(store: Store, attempt: AttemptRow, input: { baseCommit?: string; commit?: string }) {

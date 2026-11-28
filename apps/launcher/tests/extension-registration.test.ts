@@ -67,6 +67,9 @@ it('install 复用已配对 Pi 命令和 PATH，并传递真实绝对包路径',
   expect(calls).toEqual([{ file: '/mock/Pi tools/pi', args: ['install', pkg.root],
     options: expect.objectContaining({ env: expect.objectContaining({ PATH: '/mock/node/bin:/usr/bin' }) }) }]);
   expect(text).toContain(pkg.root);
+  expect(text).toContain('正在运行的 Pi 需重启');
+  expect(text).toContain('重启 Pi 会话');
+  expect(text).not.toContain('/reload');
 });
 
 it('未配对时使用默认 pi 命令，不因缺少本机配置而阻塞', async () => {

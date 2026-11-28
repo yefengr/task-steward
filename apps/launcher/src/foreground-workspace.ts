@@ -8,6 +8,8 @@ type Permission = Extract<LauncherSessionDirective, { step: 'stop' | 'launch' }>
 
 export async function validateForegroundWorkspace(directive: Permission): Promise<SessionOperationFailure | undefined> {
   const expected = directive.foregroundGit;
+  // 无 Git 准备快照的任务只需接回原会话，不增加现场门槛。
+  if (!expected) return undefined;
   const path = directive.locator.path;
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_'))), LC_ALL: 'C' };
   const git = (...args: string[]) => run('git', ['-C', path, ...args], { env, timeout: 2_000, maxBuffer: 1024 * 1024 });
@@ -27,7 +29,9 @@ export async function validateForegroundWorkspace(directive: Permission): Promis
     let branch: string | null = null;
     try { branch = (await git('symbolic-ref', '--quiet', '--short', 'HEAD')).stdout.trimEnd(); }
     catch (error) { if ((error as { code?: number }).code !== 1) throw error; }
-    if (expected && (expected.kind !== kind || expected.branch !== branch)) return 'session_workspace_unavailable';
+    if (expected.kind !== kind) return 'session_workspace_unavailable';
+    if (expected.branch !== branch && (kind !== 'linked' || !branch ||
+        (await git('status', '--porcelain', '--untracked-files=all')).stdout.length)) return 'session_workspace_unavailable';
     // 脏主目录中的改动归属不能由程序猜测，必须先在原会话核对并确认迁移策略。
     if (kind === 'primary' && (await git('status', '--porcelain', '--untracked-files=all')).stdout.length) {
       return 'session_workspace_unavailable';

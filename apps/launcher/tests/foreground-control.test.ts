@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { LauncherSessionDirective } from '@pi-steward/contract';
 import { acquireExecutionLock } from '@pi-steward/execution-runtime';
 import { SessionControl } from '../src/session-control.js';
+import { validateForegroundWorkspace } from '../src/foreground-workspace.js';
 import type { State } from '../src/state.js';
 import type { Tmux } from '../src/tmux.js';
 
@@ -81,6 +82,19 @@ it('主目录存在未提交改动时停止；分支与快照不匹配也停止'
   await mismatch.apply({ ...mismatch.stop, step: 'stop', sourceEnded: false, foregroundGit: { kind: 'linked', branch: 'task' } });
   expect(mismatch.state.sessionOperations?.[0]?.report).toMatchObject({ failure: 'session_workspace_unavailable' });
 });
+it('无 Git 快照不额外核对现场；原 linked 树干净分支变更可交由扩展登记，脏变更拒绝', async () => {
+  const x = fixture();
+  execFileSync('git', ['init', '--quiet', '--initial-branch=main', x.path]);
+  expect(await validateForegroundWorkspace({ ...x.stop, foregroundGit: undefined })).toBeUndefined();
+  execFileSync('git', ['-C', x.path, '-c', 'user.name=test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'base']);
+  const linked = join(x.path, 'linked');
+  execFileSync('git', ['-C', x.path, 'worktree', 'add', '-qb', 'feature/new', linked]);
+  const directive = { ...x.stop, locator: { ...x.locator, path: linked }, foregroundGit: { kind: 'linked' as const, branch: 'feature/old' } };
+  expect(await validateForegroundWorkspace(directive)).toBeUndefined();
+  writeFileSync(join(linked, 'unknown'), 'keep');
+  expect(await validateForegroundWorkspace(directive)).toBe('session_workspace_unavailable');
+});
+
 it('普通 Pi 暂停后继续必须重新取目标锁，并恢复原 locator 为接续模式', async () => {
   const x = fixture(); const directive = { ...x.launch, mode: 'continue' as const };
   const release = acquireExecutionLock(x.configFile, x.goalId);

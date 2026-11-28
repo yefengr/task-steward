@@ -78,9 +78,11 @@ export async function prepareGit(data: c.AgentContextResponse, taskBranch: strin
         catch { throw new AgentError('git_fetch_failed'); }
         const target = c.gitCommitSchema.parse(await git(repositoryPath, 'rev-parse', '--verify', 'FETCH_HEAD'));
         if (baseCommit !== target && await isAncestor(repositoryPath, baseCommit, target)) {
-          // 重新读取检出状态；只推进明确 ref，不向其他工作树的 HEAD/index 写入。
-          if ((await worktrees(repositoryPath)).some((entry) => entry.branch === ref)) throw new AgentError('git_base_checked_out');
-          await git(repositoryPath, 'update-ref', ref, target, baseCommit);
+          // fetch 期间现场可能变化：重读检出状态及引用，不修改已检出基准的 HEAD/index。
+          const current = (await worktrees(repositoryPath)).filter((entry) => entry.branch === ref);
+          for (const entry of current) { if (entry.locked) throw new AgentError('git_worktree_locked'); await clean(entry.path); }
+          if (await git(repositoryPath, 'rev-parse', '--verify', ref) !== baseCommit) throw new AgentError('git_snapshot_conflict');
+          if (!current.length) await git(repositoryPath, 'update-ref', ref, target, baseCommit);
           baseCommit = target;
         } else if (!await isAncestor(repositoryPath, target, baseCommit)) throw new AgentError('git_upstream_diverged');
         syncResult = 'synced';
@@ -103,14 +105,19 @@ export async function proveWorkspace(ctx: Pick<ExtensionContext, 'cwd' | 'sessio
     const root = await realpath(await git(ctx.cwd, 'rev-parse', '--show-toplevel'));
     const repository = await realpath(snapshot.repositoryPath);
     const common = async (path: string) => realpath(await git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir'));
-    if (repository !== snapshot.repositoryPath || workspace.gitKind !== 'linked' || workspace.gitBranch !== snapshot.taskBranch ||
+    if (repository !== snapshot.repositoryPath || workspace.gitKind !== 'linked' || !workspace.gitBranch || workspace.gitBranch === snapshot.baseBranch ||
       root === repository || (snapshot.worktreePath && root !== snapshot.worktreePath) ||
       await common(root) !== await common(repository)) throw new Error();
     const gitDir = await realpath(await git(root, 'rev-parse', '--absolute-git-dir'));
     const marker = JSON.parse(await readFile(join(gitDir, 'pi-worktree-manager.json'), 'utf8')) as Record<string, unknown>;
     if (marker.schemaVersion !== 1 || typeof marker.createdAt !== 'string' ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(marker.createdAt) || !Number.isFinite(Date.parse(marker.createdAt))) throw new Error();
-    const listed = (await worktrees(root)).find((entry) => entry.path === root && entry.branch === `refs/heads/${snapshot.taskBranch}`);
+    if (!snapshot.worktreePath) await clean(root);
+    if (workspace.gitBranch !== snapshot.taskBranch) {
+      if (delivery || snapshot.worktreePath !== root) throw new Error();
+      await clean(root);
+    }
+    const listed = (await worktrees(root)).find((entry) => entry.path === root && entry.branch === `refs/heads/${workspace.gitBranch}`);
     if (!listed || listed.locked) throw new Error();
     await git(root, 'merge-base', '--is-ancestor', snapshot.baseCommit, 'HEAD');
     if (delivery) {

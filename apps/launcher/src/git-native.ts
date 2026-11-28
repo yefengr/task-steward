@@ -101,7 +101,9 @@ export async function mergeAccepted(op: LauncherGitOperation) {
   const head = await git(root, 'rev-parse', '--verify', ref);
   // 已合入可恢复 merge 成功但尚未来得及落 journal 的崩溃。
   if (await ancestor(root, op.approvedCommit, head)) return;
-  if (!await ancestor(root, op.baseCommit, head) || !await ancestor(root, head, op.approvedCommit)) throw new GitFailure('git_target_diverged', true);
+  // 开工可直接使用远端提交，本地基准可能仍落后于冻结起点；只接受同一条祖先链上的安全快进。
+  const comparable = await ancestor(root, op.baseCommit, head) || await ancestor(root, head, op.baseCommit);
+  if (!comparable || !await ancestor(root, head, op.approvedCommit)) throw new GitFailure('git_target_diverged', true);
   const checked = (await records(root)).filter((entry) => entry.branch === ref);
   if (checked.length > 1 || checked.some((entry) => entry.unsafe)) throw new GitFailure('git_target_occupied');
   // 不向其他检出目录写入；外部切换分支也不能把更新重定向到其 HEAD。

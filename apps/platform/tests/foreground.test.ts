@@ -151,19 +151,16 @@ it('已确认结束讨论不得改为后台继续', async () => {
   expect((await agent(x, b, '/end-discussion', request())).status).toBe(200);
   expect((await x.action(b.taskId, 'session-operation', request({ attemptId: b.attemptId, mode: 'background' }))).status).toBe(409);
 });
-it('实施交接必须有 Git 快照，stop/launch/cleanup 保留分支和 owner', async () => {
+it('未准备 Git 的实施交接不要求手工现场，stop/launch/cleanup 保留 owner', async () => {
   const x = await setup(); const b = await bind(x, { ...input(), type: 'implementation' });
   const beat = () => x.launcher('/heartbeat', request({ launcherVersion: 'test', slots: 1, projects: [project], attempts: [], sessionControl: true, foregroundControl: true }));
   await beat();
-  const rejected = await x.action(b.taskId, 'session-operation', request({ attemptId: b.attemptId, mode: 'background' }));
-  expect(rejected.status).toBe(409); expect((await rejected.json()).error.code).toBe('session_workspace_unconfirmed');
-  const workspace = { ...b.body.locator, gitKind: 'linked', gitBranch: 'feature/foreground' };
-  expect((await agent(x, b, '/workspace', request({ workspace }))).status).toBe(200);
   const op = request({ attemptId: b.attemptId, mode: 'background' });
   expect((await x.action(b.taskId, 'session-operation', op)).status).toBe(200);
-  const permission = { foregroundOwner: { goalId: b.goalId, pid: b.pid }, foregroundGit: { kind: 'linked', branch: 'feature/foreground' } };
+  const permission = { foregroundOwner: { goalId: b.goalId, pid: b.pid } };
   const stop = launcherHeartbeatResponseSchema.parse(await (await beat()).json());
   expect(stop.sessionOperations?.[0]).toMatchObject({ ...permission, step: 'stop' });
+  expect(stop.sessionOperations?.[0]).not.toHaveProperty('foregroundGit');
   expect((await x.launcher(`/session-operations/${op.requestId}/report`, request({ step: 'stop', result: 'stopped' }))).status).toBe(200);
   const launch = launcherHeartbeatResponseSchema.parse(await (await beat()).json());
   expect(launch.sessionOperations?.[0]).toMatchObject({ ...permission, step: 'launch' });
@@ -225,7 +222,7 @@ it('前台交付后的后台返修也先核对原进程，失败不自动循环�
   expect(detail.attempts.at(-1)).toMatchObject({ kind: 'rework', sessionId: b.body.locator.sessionId });
   expect((await (await x.agent(detail.attempts.at(-1)!.id, '/context')).json()).attempt.kind).toBe('rework');
 });
-it('未确认现场的前台返修只阻塞自身，不阻塞该机器其它可领取任务', async () => {
+it('未准备 Git 的前台返修无需手工登记即可进入原会话交接，不阻塞其它任务', async () => {
   const x = await setup(); const b = await bind(x, { ...input(), type: 'implementation' });
   const submitted = await (await agent(x, b, '/deliveries', request(delivery))).json();
   await agent(x, b, '/foreground/settle', request());
@@ -234,7 +231,10 @@ it('未确认现场的前台返修只阻塞自身，不阻塞该机器其它可�
   const other = await x.create('不受阻的独立任务', { machineId: x.machineId });
   await x.action(other.id, 'schedule');
   const response = await x.launcher('/claim', request());
-  expect(response.status).toBe(200); expect((await response.json()).attempt.taskId).toBe(other.id);
+  expect(response.status).toBe(200); expect(await response.json()).toEqual({ attempt: null });
+  const operation = x.store.get<{ source_attempt_id: string; step: string }>('SELECT * FROM session_operations WHERE task_id=?', b.taskId);
+  expect(operation).toMatchObject({ source_attempt_id: b.attemptId, step: 'stop' });
+  expect((await (await x.launcher('/claim', request())).json()).attempt.taskId).toBe(other.id);
   expect((await x.detail(b.taskId)).task.status).toBe('queued');
 });
 it('真实失权状态优先于临时交接错误，返修排队不能被 stop 核对遮蔽', async () => {
